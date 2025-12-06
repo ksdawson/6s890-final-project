@@ -137,6 +137,7 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb
+!studies/game_study/*.ipynb
 
 # IPython
 profile_default/
