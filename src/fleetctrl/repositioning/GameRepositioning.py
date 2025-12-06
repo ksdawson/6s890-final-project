@@ -30,6 +30,11 @@ class Game:
             actions.append(player.action())
         
         return actions
+    
+    def get_payoff(self, wait_time):
+        payoff = 1/wait_time # incentivize shorter wait time
+        payoff *= 100 # prevent small floating point issues
+        return payoff
 
 class GameRepositioning(RepositioningBase):
     def __init__(self, fleetctrl, operator_attributes, dir_names):
@@ -96,7 +101,7 @@ class GameRepositioning(RepositioningBase):
                     wait_time = self.get_pickup_wait_time(vid)
                     if wait_time is not None:
                         # Assigned a ride so give payoff
-                        payoff = -wait_time # neg to incentivize shorter wait time
+                        payoff = self.game.get_payoff(wait_time)
                         state = 'ride'
                     else:
                         state = 'repo'
