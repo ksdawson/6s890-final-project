@@ -1,2 +1,2 @@
-study_name,scenario_name,rq_file,op_fleet_composition,op_module
-game_study,example_pool_irsonly_sc_1,example_100.csv,default_vehtype:10,PoolingIRSOnly
+study_name,scenario_name,rq_file,op_fleet_composition,op_module,op_repo_method,op_repo_horizons,op_repo_timestep,op_fc_type,op_temporal_resolution
+game_study,example_pool_irsonly_sc_1,example_100.csv,default_vehtype:10,PoolingIRSOnly,GameRepositioning,0;900,300,perfect,300
