@@ -138,6 +138,7 @@ target/
 .ipynb_checkpoints
 *.ipynb
 !studies/game_study/*.ipynb
+studies/game_study/.ipynb_checkpoints/
 
 # IPython
 profile_default/
