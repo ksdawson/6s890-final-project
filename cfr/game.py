@@ -31,22 +31,20 @@ class StochasticGame:
     def get_actions_for(cls, s):
         p, q = sum(s), len(s)
         new_states = StochasticGame.generate_states(p, q)
-        return {
-            tuple(new_s[i] - s[i] for i in range(q))
-            for new_s in new_states
-        }
+        return tuple({tuple(new_s[i] - s[i] for i in range(q)) for new_s in new_states})
 
-    def __init__(self, p1, p2, d):
+    def __init__(self, p1, p2, depth, gamma=1.0):
         # Game params
         self.p1_states = StochasticGame.generate_states(*p1)
         self.p2_states = StochasticGame.generate_states(*p2)
         self.p1 = p1
         self.p2 = p2
-        self.max_depth = d
+        self.max_depth = depth
+        self.gamma = gamma
 
         # TODO: set real initial state
-        s1 = random.choice(list(self.p1_states))
-        s2 = random.choice(list(self.p2_states))
+        s1 = random.choice(self.p1_states)
+        s2 = random.choice(self.p2_states)
         self.root = GameState(s1, s2)
 
     def initial_state(self):
