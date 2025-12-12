@@ -11,15 +11,21 @@ def get_combos(target, num_slots, current_combo=None):
         yield from get_combos(target - i, num_slots - 1, current_combo + [i])
 
 class GameState:
-    def __init__(self, s, prev_s=None, next_s=None):
-        self.s = s
-        self.prev = prev_s
-        self.next = next_s
+    def __init__(self, s1, s2, history=None):
+        self.s1 = s1
+        self.s2 = s2
+        self.history = history or []
+
+    def infoset_key(self, player):
+        # Player sees only their own local state + their own actions (i.e their state history)
+        player_s = self.s1 if player == 1 else self.s2
+        player_history = tuple(s[player-1] for s in self.history)
+        return (player, player_s, player_history)
 
 class StochasticGame:
     @classmethod
     def generate_states(cls, p, q):
-        return {combo for tot in range(p) for combo in get_combos(tot, q)}
+        return tuple({combo for tot in range(p+1) for combo in get_combos(tot, q)})
 
     @classmethod
     def get_actions_for(cls, s):
@@ -36,46 +42,38 @@ class StochasticGame:
         self.p2_states = StochasticGame.generate_states(*p2)
         self.p1 = p1
         self.p2 = p2
-        self.d = d
+        self.max_depth = d
 
-        # TODO: replace with real initial state
+        # TODO: set real initial state
         s1 = random.choice(list(self.p1_states))
         s2 = random.choice(list(self.p2_states))
+        self.root = GameState(s1, s2)
 
-        # State values
-        self.p1_curr = GameState(s1)
-        self.p2_curr = GameState(s2)
-        self.hist_len = 1
+    def initial_state(self):
+        return self.root
 
-    def is_terminal(self):
-        return self.hist_len == self.d
+    def is_terminal(self, s):
+        return len(s.history) >= self.max_depth
 
-    def actions(self):
-        a1 = StochasticGame.get_actions_for(self.p1_curr)
-        a2 = StochasticGame.get_actions_for(self.p2_curr)
+    def actions(self, s):
+        a1 = StochasticGame.get_actions_for(s.s1)
+        a2 = StochasticGame.get_actions_for(s.s2)
         return a1, a2
 
-    def step(self, state, a1, a2):
+    def step(self, s, a1, a2):
         # TODO: replace with real transition model
-        p1_next = random.choice(list(self.p1_states))
-        p2_next = random.choice(list(self.p2_states))
+        next_s1 = random.choice(list(self.p1_states))
+        next_s2 = random.choice(list(self.p2_states))
 
         # TODO: replace with real reward
         r = random.randint(0, 10)
         reward = (r, -r)
 
-        # Update player states
-        self.p1_curr.next = p1_next
-        self.p1_curr = GameState(p1_next, prev=self.p1_curr)
-        self.p2_curr.next = p2_next
-        self.p2_curr = GameState(p2_next, prev=self.p2_curr)
-        self.hist_len += 1
+        # Construct next state
+        next_history = s.history + [((s.s1, a1), (s.s2, a2))]
+        next_s = GameState(next_s1, next_s2, next_history)
 
-        return reward
-
-    def infoset_key(self, player):
-        # Player sees only their own local state + their own actions (i.e their state history)
-        return self.p1_curr if player == 1 else self.p2_curr
+        return next_s, reward
 
 if __name__ == '__main__':
     p1, p2 = (1, 2), (1, 2)
