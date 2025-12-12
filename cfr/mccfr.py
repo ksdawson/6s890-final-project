@@ -25,22 +25,17 @@ class MonteCarloCFR:
         # Compute the average strategy for each info set
         self.average_strategy()
 
-    def update_infosets(self, state):
-        # Get infoset for each player
-        i1 = state.infoset_key(1)
-        i2 = state.infoset_key(2)
-
-        # Get actions for each player
-        a1, a2 = self.game.actions(state)
+    def update_infosets(self, s, p):
+        # Get infoset, action for player
+        i = s.infoset_key(p)
+        a = self.game.actions(s)
 
         # Update infosets
-        if i1 not in self.regret_sum:
-            self.regret_sum[i1] = {a:0.0 for a in a1}
-            self.strategy_sum[i1] = {a:0.0 for a in a1}
-        if i2 not in self.regret_sum:
-            self.regret_sum[i2] = {a:0.0 for a in a2}
-            self.strategy_sum[i2] = {a:0.0 for a in a2}
-        return i1, i2, a1, a2
+        if i not in self.regret_sum:
+            self.regret_sum[i] = {a:0.0 for _a in a}
+            self.strategy_sum[i] = {a:0.0 for _a in a}
+
+        return i, a
 
     def regret_matching(self, info_set):
         pos_regrets = {a:max(r,0) for a,r in info_set.items()}
@@ -69,15 +64,16 @@ class MonteCarloCFR:
             return 0
         
         # Update CFR state
-        i1, i2, a1, a2 = self.update_infosets(s)
+        i1, a1 = self.update_infosets(s, 1)
+        i2, a2 = self.update_infosets(s, 2)
 
         # Get strategies for both players
         sigma_1 = self.regret_matching(self.regret_sum[i1])
         sigma_2 = self.regret_matching(self.regret_sum[i2])
 
         # Sample actions from strategies
-        a1_sampled = random.choices(a1, weights=[sigma_1[a] for a in a1])[0]
-        a2_sampled = random.choices(a2, weights=[sigma_2[a] for a in a2])[0]
+        a1_sampled = random.choices(a1, weights=[sigma_1[a] for a in a1], k=1)[0]
+        a2_sampled = random.choices(a2, weights=[sigma_2[a] for a in a2], k=1)[0]
 
         # State transition
         next_s, (r1, r2) = self.game.step(s, a1_sampled, a2_sampled)
