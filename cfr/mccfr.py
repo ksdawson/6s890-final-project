@@ -1,183 +1,137 @@
 import random
-from collections import defaultdict
-from game import GameState, StochasticGame
+from game import StochasticGame
 
-class MCCFRTrainer:
+class MonteCarloCFR:
     def __init__(self, game):
         self.game = game
-        self.regret_sum = defaultdict(float)
-        self.strategy_sum = defaultdict(float)
-        
-        # Maps infoset -> list of valid actions (cached)
-        self.infoset_actions = {}
+        self.regret_sum = {} # R[I][a]
+        self.strategy_sum = {} # s[I][a]
+        self.strategy = {} # S[I][a]
 
-    def get_strategy(self, infoset, legal_actions):
-        """Regret Matching: Get current strategy based on accumulated regret."""
-        regrets = [self.regret_sum[(infoset, a)] for a in legal_actions]
-        positive_regrets = [max(r, 0) for r in regrets]
-        sum_positive = sum(positive_regrets)
+    def average_strategy(self):
+        for i, strategy in self.strategy_sum.items():
+            tot = sum(strategy.values())
+            if tot > 0:
+                self.strategy[i] = {a:s/tot for a,s in strategy.items()}
+            else:
+                self.strategy[i] = {a:1/len(strategy) for a,_ in strategy.items()}
 
-        if sum_positive > 0:
-            return [r / sum_positive for r in positive_regrets]
+    def train(self, iters):
+        # Run a traversal for each player for each iteration
+        for i in range(iters):
+            self.traverse(self.game.initial_state(), p=1, reach_prob=1.0)
+            self.traverse(self.game.initial_state(), p=2, reach_prob=1.0)
+
+        # Compute the average strategy for each info set
+        self.average_strategy()
+
+    def update_infosets(self, state):
+        # Get infoset for each player
+        i1 = state.infoset_key(1)
+        i2 = state.infoset_key(2)
+
+        # Get actions for each player
+        a1, a2 = self.game.actions(state)
+
+        # Update infosets
+        if i1 not in self.regret_sum:
+            self.regret_sum[i1] = {a:0.0 for a in a1}
+            self.strategy_sum[i1] = {a:0.0 for a in a1}
+        if i2 not in self.regret_sum:
+            self.regret_sum[i2] = {a:0.0 for a in a2}
+            self.strategy_sum[i2] = {a:0.0 for a in a2}
+        return i1, i2, a1, a2
+
+    def regret_matching(self, info_set):
+        pos_regrets = {a:max(r,0) for a,r in info_set.items()}
+        sum_pos_regrets = sum(pos_regrets.values())
+        if sum_pos_regrets > 0:
+            sigma = {a:r/sum_pos_regrets for a,r in pos_regrets.items()}
         else:
-            return [1.0 / len(legal_actions) for _ in legal_actions]
+            sigma = {a:1/len(pos_regrets) for a,_ in pos_regrets.items()}
+        return sigma
+    
+    def update_player(self, i, a, a_sampled, sigma, u, reach_prob):
+        # Counterfactual regret estimator
+        for _a in a:
+            if _a == a_sampled:
+                w = 1.0 / sigma[_a]
+            else:
+                w = 0.0
+            self.regret_sum[i][_a] += w * u - u
+        # Average strategy update (importance weighted)
+        self.strategy_sum[i][a_sampled] += reach_prob / sigma[a_sampled]
 
-    def get_average_strategy(self, infoset, legal_actions):
-        """Compute the average strategy over all iterations (the final output)."""
-        strategy_sum = [self.strategy_sum[(infoset, a)] for a in legal_actions]
-        total = sum(strategy_sum)
-        if total > 0:
-            return [s / total for s in strategy_sum]
-        return [1.0 / len(legal_actions) for _ in legal_actions]
-
-    def train(self, iterations):
-        for i in range(iterations):
-            # External Sampling: Alternating updates
-            # Iteration 1: Update P1 (P2 plays according to strategy)
-            # Iteration 2: Update P2 (P1 plays according to strategy)
-            self.traverse(self.game.initial_state(), update_player=1)
-            self.traverse(self.game.initial_state(), update_player=2)
-            
-            if (i + 1) % 100 == 0:
-                print(f"Iteration {i+1}/{iterations} complete")
-
-    def traverse(self, state, update_player):
-        if self.game.is_terminal(state):
-            # step() returns (r, -r), so reward depends on who we are
-            # We need the reward of the *previous* step that led here.
-            # But the reward is returned by step(). 
-            # In this architecture, rewards are collected during the traversal returns.
-            return 0 
-
-        # 1. Identify infosets and legal actions
-        infoset_p1 = state.infoset_key(1)
-        infoset_p2 = state.infoset_key(2)
+    def traverse(self, s, p, reach_prob):
+        # Base case
+        if self.game.is_terminal(s):
+            # Reward is accumulated at each step in the recursive return value
+            return 0
         
-        actions_p1, actions_p2 = self.game.actions(state)
+        # Update CFR state
+        i1, i2, a1, a2 = self.update_infosets(s)
 
-        # Cache actions for consistency
-        if infoset_p1 not in self.infoset_actions: self.infoset_actions[infoset_p1] = actions_p1
-        if infoset_p2 not in self.infoset_actions: self.infoset_actions[infoset_p2] = actions_p2
+        # Get strategies for both players
+        sigma_1 = self.regret_matching(self.regret_sum[i1])
+        sigma_2 = self.regret_matching(self.regret_sum[i2])
 
-        # 2. Get strategies for both players
-        sigma_1 = self.get_strategy(infoset_p1, actions_p1)
-        sigma_2 = self.get_strategy(infoset_p2, actions_p2)
+        # Sample actions from strategies
+        a1_sampled = random.choices(a1, weights=[sigma_1[a] for a in a1])[0]
+        a2_sampled = random.choices(a2, weights=[sigma_2[a] for a in a2])[0]
 
-        # 3. Handle External Sampling Logic
-        if update_player == 1:
-            # P1 is traversing: Iterate all P1 actions, Sample 1 P2 action
-            
-            # Sample opponent action (P2)
-            a2 = random.choices(actions_p2, weights=sigma_2, k=1)[0]
-            
-            # Values for each of P1's actions
-            action_values = []
-            node_value = 0
+        # State transition
+        next_s, (r1, r2) = self.game.step(s, a1_sampled, a2_sampled)
 
-            for i, a1 in enumerate(actions_p1):
-                # EXTERNAL SAMPLING:
-                # We branch for every one of OUR actions
-                next_state, reward_tuple = self.game.step(state, a1, a2)
-                
-                # Recursion
-                # reward_tuple[0] is P1's immediate reward
-                future_val = self.traverse(next_state, update_player)
-                total_val = reward_tuple[0] + self.game.gamma * future_val
-                
-                action_values.append(total_val)
-                # Weighted contribution to the current node's value
-                node_value += sigma_1[i] * total_val
+        # Recursive continuation
+        next_reach = reach_prob * (sigma_2[a2_sampled] if p == 1 else sigma_1[a1_sampled])
+        v_next = self.traverse(next_s, p, next_reach)
 
-            # Update Regrets for P1
-            for i, a1 in enumerate(actions_p1):
-                regret = action_values[i] - node_value
-                self.regret_sum[(infoset_p1, a1)] += regret
-                
-            # Update Average Strategy for P2 (The opponent contributes to avg strategy in this pass)
-            # NOTE: Standard External Sampling usually updates avg strat for the *traverser*.
-            # However, in simultaneous updates, a common pattern is updating the traverser's cumulative strategy.
-            for i, a1 in enumerate(actions_p1):
-                self.strategy_sum[(infoset_p1, a1)] += sigma_1[i]
+        # Utility for updating player
+        u = (r1 if p == 1 else r2) + self.game.gamma * v_next
 
-            return node_value
-
+        # Update player
+        if p == 1:
+            self.update_player(i1, a1, a1_sampled, sigma_1, u, reach_prob)
         else:
-            # P2 is traversing: Iterate all P2 actions, Sample 1 P1 action
-            
-            # Sample opponent action (P1)
-            a1 = random.choices(actions_p1, weights=sigma_1, k=1)[0]
-            
-            action_values = []
-            node_value = 0
+            self.update_player(i2, a2, a2_sampled, sigma_2, u, reach_prob)
 
-            for i, a2 in enumerate(actions_p2):
-                next_state, reward_tuple = self.game.step(state, a1, a2)
-                
-                # Recursion
-                # reward_tuple[1] is P2's immediate reward
-                future_val = self.traverse(next_state, update_player)
-                total_val = reward_tuple[1] + self.game.gamma * future_val
-                
-                action_values.append(total_val)
-                node_value += sigma_2[i] * total_val
-
-            # Update Regrets for P2
-            for i, a2 in enumerate(actions_p2):
-                regret = action_values[i] - node_value
-                self.regret_sum[(infoset_p2, a2)] += regret
-
-            # Update Average Strategy for P2
-            for i, a2 in enumerate(actions_p2):
-                self.strategy_sum[(infoset_p2, a2)] += sigma_2[i]
-
-            return node_value
+        return u
 
 def print_strategy(trainer):
-    print("\n--- Full Strategy Dump (All Infosets) ---")
-    print(f"{'Plyr':<4} | {'State':<10} | {'History Len':<11} | {'Action':<15} | {'Probability'}")
-    print("-" * 70)
+    # Separate player strategies
+    strategy = trainer.strategy
+    p1_strategy, p2_strategy = [], []
+    for i, s in strategy.items():
+        p = i[0]
+        p_strategy = p1_strategy if p == 1 else p2_strategy
+        p_strategy.append((i, s))
+    
+    # Sort by history length (i.e. layer)
+    p1_strategy.sort(key=lambda x: len(x[0][2]))
+    p2_strategy.sort(key=lambda x: len(x[0][2]))
 
-    # 1. Sort infosets by Player, then by History length (for readability)
-    sorted_infosets = sorted(
-        trainer.infoset_actions.keys(), 
-        key=lambda x: (x[0], len(x[2]), str(x[1]))
-    )
-
-    for infoset in sorted_infosets:
-        player = infoset[0]
-        local_state = infoset[1]
-        history = infoset[2]
-        
-        # Retrieve cached legal actions
-        actions = trainer.infoset_actions[infoset]
-        
-        # Calculate the Nash Equilibrium strategy for this spot
-        strategy = trainer.get_average_strategy(infoset, actions)
-        
-        # Print each action-probability pair
-        first_line = True
-        for action, prob in zip(actions, strategy):
-            # Optional: Filter out 0% probability actions to reduce clutter
-            if prob > 0.001:
-                state_str = str(local_state)
-                hist_len = str(len(history))
-                prefix = f"P{player:<3} | {state_str:<10} | {hist_len:<11}" if first_line else " " * 30
-                
-                print(f"{prefix} | {str(action):<15} | {prob:.4f}")
-                first_line = False
-                
-        if not first_line: # Only print separator if we printed actions
-            print("-" * 70)
+    # Print
+    print('Player | Layer | Strategy')
+    print('-'*70)
+    for i, s in p1_strategy:
+        s = {a:round(p,3) for a,p in s.items()}
+        print(1, '     |', len(i[2]), '    |', s)
+        print('-'*70)
+    for i, s in p2_strategy:
+        s = {a:round(p,3) for a,p in s.items()}
+        print(2, '     |', len(i[2]), '    |', s)
+        print('-'*70)
 
 if __name__ == '__main__':
-    # Reduced depth for demonstration speed
+    # Reduced depth for debugging
     p1, p2 = (1, 2), (1, 2)
     game = StochasticGame(p1, p2, depth=3)
     
-    trainer = MCCFRTrainer(game)
+    # Run MCCFR
+    mccfr = MonteCarloCFR(game)
     print("Starting MCCFR Training...")
-    trainer.train(iterations=1000)
+    mccfr.train(iters=1000)
     print("Training Complete.")
 
     # Debug
-    print_strategy(trainer)
+    print_strategy(mccfr)
