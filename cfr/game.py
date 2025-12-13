@@ -1,5 +1,5 @@
 import random
-# from transition import Transition
+# from transition_func import Transition
 
 def get_combos(target, num_slots, current_combo=None):
     if current_combo is None:

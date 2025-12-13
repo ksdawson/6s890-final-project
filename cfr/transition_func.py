@@ -176,6 +176,9 @@ class Transition:
             zid: next(iter(nodes)) for zid, nodes in self.zones.items()
         }
 
+        # Keep track of reward
+        reward = {1: 0, 2: 0}
+
         # For each zone, match demand
         for zone_id, zone_demand in demand_by_zones.items():
             zone_demand = list(zone_demand)
@@ -205,6 +208,10 @@ class Transition:
                         continue  # or raise error
 
                     assignments_log.append((future_t, player, dst_zone, 1))
+
+            # Update reward
+            reward[1] += assigns[1]
+            reward[2] += assigns[2]
 
             # If demand met keep going
             if remaining == 0:
@@ -256,17 +263,24 @@ class Transition:
                             continue  # or raise error
 
                         assignments_log.append((future_t, player, dst_zone, 1))
+                
+                # Update reward
+                reward[1] += assigns[1]
+                reward[2] += assigns[2]
 
         # Apply repositioning actions (simple additive model w/ cap at 0)
         for i in range(len(new_s1)):
             new_s1[i] = max(0, new_s1[i] + a1[i])
             new_s2[i] = max(0, new_s2[i] + a2[i])
+            # TODO: Add as assignments to log so they can be added back in
 
         # Update history
         for future_t, player, zone_id, cnt in assignments_log:
             if future_t not in self.state_history:
                 self.state_history[future_t] = {}
             self.state_history[future_t][(player, zone_id)] = self.state_history[future_t].get((player, zone_id), 0) + 1
+
+        return new_s1, new_s2, reward[1], reward[2], None
 
 if __name__ == '__main__':
     # Setup transition info
@@ -284,4 +298,5 @@ if __name__ == '__main__':
     # Test getting next state
     p1, p2 = (p,q), (p,q)
     transition = Transition(p1, p2, graph, zones, demands)
-    next_s = transition.next_state((1, 600), s, a1, a2)
+    next_s1, next_s2, r1, r2, prob = transition.next_state((1, 600), s, a1, a2)
+    print(next_s1, next_s2, r1, r2, prob)
