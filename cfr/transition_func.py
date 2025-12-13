@@ -94,6 +94,9 @@ class Transition:
         self.state_history = {}
         self.zones = zones
         self.demands = demands
+        self.zone_rep = {
+            zid: next(iter(nodes)) for zid, nodes in self.zones.items()
+        }
         
     def travel_time(self, src, dst):
         try:
@@ -110,6 +113,72 @@ class Transition:
         for zone_id, zone in self.zones.items():
             if node in zone:
                 return zone_id
+            
+    def apply_repositioning(self, player, new_s, a, t):
+        """
+        Apply repositioning action for a player.
+
+        :param new_s: list of idle vehicles per zone (after demand assignment)
+        :param a: repositioning action vector (sum(a) == 0)
+        :param t: tuple (time_idx, time_step)
+        :return: assignments_log, new_s_post_action
+        """
+        time_idx, time_step = t
+        assignments_log = []
+
+        # Copy state so we can return the updated state
+        new_s_post_action = list(new_s)
+
+        out_zones = [(i, -a[i]) for i in range(len(a)) if a[i] < 0]
+        in_zones  = [(i,  a[i]) for i in range(len(a)) if a[i] > 0]
+
+        # Sanity check
+        if sum(cnt for _, cnt in out_zones) != sum(cnt for _, cnt in in_zones):
+            # If action is not flow-conserving, discard it
+            return [], new_s_post_action
+
+        # Greedy matching of flows
+        oi = ii = 0
+        while oi < len(out_zones) and ii < len(in_zones):
+            src, out_cnt = out_zones[oi]
+            dst, in_cnt  = in_zones[ii]
+
+            flow = min(out_cnt, in_cnt, new_s_post_action[src])  # only take what is available
+            if flow == 0:
+                # Skip zones with no idle vehicles
+                if new_s_post_action[src] == 0:
+                    oi += 1
+                if in_cnt == 0:
+                    ii += 1
+                continue
+
+            # Consume idle vehicles at source
+            new_s_post_action[src] -= flow
+
+            # Schedule return at destination
+            src_zone_id = self.get_zone(src)
+            dst_zone_id = self.get_zone(dst)
+            src_node = self.zone_rep[src_zone_id]
+            dst_node = self.zone_rep[dst_zone_id]
+
+            travel = nx.shortest_path_length(
+                self.graph, src_node, dst_node, weight="travel_time"
+            )
+            future_t = time_idx + max(1, int(travel // time_step))
+
+            assignments_log.append(
+                (future_t, player, dst + 1, flow)
+            )
+
+            out_zones[oi] = (src, out_cnt - flow)
+            in_zones[ii]  = (dst, in_cnt - flow)
+
+            if out_zones[oi][1] == 0:
+                oi += 1
+            if in_zones[ii][1] == 0:
+                ii += 1
+
+        return assignments_log, new_s_post_action
 
     def next_state(self, t, s, a1, a2):
         time_idx, time_step = t
@@ -171,11 +240,6 @@ class Transition:
                     new_s2[idx] += count
             del self.state_history[time_idx]
 
-        # Precompute representative node per zone (for distance calc)
-        zone_rep = {
-            zid: next(iter(nodes)) for zid, nodes in self.zones.items()
-        }
-
         # Keep track of reward
         reward = {1: 0, 2: 0}
 
@@ -218,11 +282,11 @@ class Transition:
                 continue
 
             # Spillover to nearest neighboring zones
-            src_node = zone_rep[zone_id]
+            src_node = self.zone_rep[zone_id]
 
             # Sort other zones by network distance
             other_zones = []
-            for other_id, other_node in zone_rep.items():
+            for other_id, other_node in self.zone_rep.items():
                 if other_id == zone_id:
                     continue
                 try:
@@ -268,11 +332,13 @@ class Transition:
                 reward[1] += assigns[1]
                 reward[2] += assigns[2]
 
-        # Apply repositioning actions (simple additive model w/ cap at 0)
-        for i in range(len(new_s1)):
-            new_s1[i] = max(0, new_s1[i] + a1[i])
-            new_s2[i] = max(0, new_s2[i] + a2[i])
-            # TODO: Add as assignments to log so they can be added back in
+        # Apply repositioning for p1
+        assignments_p1, new_s1 = self.apply_repositioning(1, new_s1, a1, t)
+        # Apply repositioning for p2
+        assignments_p2, new_s2 = self.apply_repositioning(2, new_s2, a2, t)
+        # Add all assignments to the log
+        assignments_log.extend(assignments_p1)
+        assignments_log.extend(assignments_p2)
 
         # Update history
         for future_t, player, zone_id, cnt in assignments_log:
@@ -280,7 +346,7 @@ class Transition:
                 self.state_history[future_t] = {}
             self.state_history[future_t][(player, zone_id)] = self.state_history[future_t].get((player, zone_id), 0) + 1
 
-        return new_s1, new_s2, reward[1], reward[2], None
+        return new_s1, new_s2, reward[1], reward[2], None # TODO: how to calculate chance prob?
 
 if __name__ == '__main__':
     # Setup transition info
