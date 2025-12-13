@@ -2,7 +2,7 @@ import random
 import csv
 import math
 import networkx as nx
-from game import GameState, StochasticGame
+# from game import GameState, StochasticGame # uncomment for testing
 
 def load_graph(node_file, edge_file, directed=True):
     G = nx.DiGraph() if directed else nx.Graph()
@@ -105,15 +105,23 @@ class Transition:
         self.zone_rep = {
             zid: next(iter(nodes)) for zid, nodes in self.zones.items()
         }
+
+        # Cache
+        self.cache = {}
         
     def travel_time(self, src, dst):
+        if (src, dst) in self.cache:
+            return self.cache[(src, dst)]
         try:
-            return nx.shortest_path_length(
+            dist = nx.shortest_path_length(
                 self.graph,
                 src,
                 dst,
                 weight='travel_time',
             )
+            if (src, dst) not in self.cache:
+                self.cache[(src, dst)] = dist
+            return dist
         except nx.NetworkXNoPath:
             return float('inf')
         
@@ -169,9 +177,9 @@ class Transition:
             src_node = self.zone_rep[src_zone_id]
             dst_node = self.zone_rep[dst_zone_id]
 
-            travel = nx.shortest_path_length(
-                self.graph, src_node, dst_node, weight="travel_time"
-            )
+            pickup_time = self.travel_time(self.zone_rep[oi], src_node)
+            trip_time = self.travel_time(src_node, dst_node)
+            travel = pickup_time + trip_time
             future_t = time_idx + max(1, int(travel // time_step))
 
             assignments_log.append(
@@ -339,9 +347,7 @@ class Transition:
                         req_t, src, dst = zone_demand[ride_idx]
                         ride_idx += 1
 
-                        # Calculate pickup time
                         pickup_time = self.travel_time(self.zone_rep[other_id], src)
-                        # Calculate trip time
                         trip_time = self.travel_time(src, dst)
                         travel = pickup_time + trip_time
                         future_t = time_idx + max(1, int(travel // time_step))
@@ -373,7 +379,7 @@ class Transition:
         # Return the probability in normal space (exp)
         final_prob = math.exp(total_log_prob)
 
-        return new_s1, new_s2, reward[1], reward[2], final_prob
+        return tuple(new_s1), tuple(new_s2), reward[1], reward[2], final_prob
 
 if __name__ == '__main__':
     # Setup transition info
@@ -381,15 +387,16 @@ if __name__ == '__main__':
     demands = [load_demand('../data/demand/example_demand/matched/example_network/example_100.csv')]
     graph = load_graph('../data/networks/example_network/base/nodes.csv', '../data/networks/example_network/base/edges.csv')
     
-    # Setup example state for debugging
-    p, q = 3, len(zones)
-    states = StochasticGame.generate_states(p, q)
-    s = GameState(random.choice(states), random.choice(states))
-    actions = StochasticGame.get_actions_for(s.s1)
-    a1, a2 = random.choice(actions), random.choice(actions)
+    # Uncomment for testing
+    # # Setup example state for debugging
+    # p, q = 3, len(zones)
+    # states = StochasticGame.generate_states(p, q)
+    # s = GameState(random.choice(states), random.choice(states))
+    # actions = StochasticGame.get_actions_for(s.s1)
+    # a1, a2 = random.choice(actions), random.choice(actions)
 
-    # Test getting next state
-    p1, p2 = (p,q), (p,q)
-    transition = Transition(p1, p2, graph, zones, demands)
-    next_s1, next_s2, r1, r2, prob = transition.next_state((1, 600), s, a1, a2)
-    print(next_s1, next_s2, r1, r2, prob)
+    # # Test getting next state
+    # p1, p2 = (p,q), (p,q)
+    # transition = Transition(p1, p2, graph, zones, demands)
+    # next_s1, next_s2, r1, r2, prob = transition.next_state((1, 600), s, a1, a2)
+    # print(next_s1, next_s2, r1, r2, prob)

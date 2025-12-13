@@ -24,8 +24,8 @@ def get_infoset_count(p, q, depth):
     return total_infosets
 
 if __name__ == '__main__':   
-    p, q = 5, 3
-    d = 6
+    p, q = 1, 5
+    d = 1
     count = get_infoset_count(p, q, d)
 
     print(f"Game Params: P={p}, Q={q}, Depth={d}")

@@ -1,5 +1,6 @@
 import random
 from game import StochasticGame
+from transition_func import load_demand, load_graph, load_zones, Transition
 
 class MonteCarloCFR:
     def __init__(self, game, deep_cfr=False, model=None):
@@ -29,6 +30,9 @@ class MonteCarloCFR:
         for i in range(iters):
             self.traverse(self.game.initial_state(), p=1, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
             self.traverse(self.game.initial_state(), p=2, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
+
+            # Reset game if need be (i.e. end of day/hand)
+            self.game.reset_game()
         # Compute the average strategy for each info set
         self.average_strategy()
 
@@ -188,8 +192,17 @@ def print_strategy(trainer):
 
 if __name__ == '__main__':
     # Reduced depth for debugging
-    p1, p2 = (1, 2), (1, 2)
-    game = StochasticGame(p1, p2, depth=3, t=None, transition=None)
+    p1, p2 = (1, 5), (1, 5)
+    depth = 1
+
+    # Setup transition info
+    zones = load_zones('../data/zones/example_zones/example_network/node_zone_info.csv')
+    demands = [load_demand('../data/demand/example_demand/matched/example_network/example_100.csv')]
+    graph = load_graph('../data/networks/example_network/base/nodes.csv', '../data/networks/example_network/base/edges.csv')
+    transition = Transition(p1, p2, graph, zones, demands)
+
+    # Create game
+    game = StochasticGame(p1, p2, depth, 600, transition=transition)
     
     # Run MCCFR
     mccfr = MonteCarloCFR(game)

@@ -1,5 +1,5 @@
 import random
-# from transition_func import Transition
+from transition_func import Transition, load_demand, load_zones, load_graph
 
 def get_combos(target, num_slots, current_combo=None):
     if current_combo is None:
@@ -47,6 +47,10 @@ class StochasticGame:
         self.transition = transition
         self.root = GameState(random.choice(list(self.p1_states)), random.choice(list(self.p2_states)))
 
+    def reset_game(self):
+        # Reset transition history
+        self.transition.state_history = {}
+
     def initial_state(self):
         return self.root
 
@@ -59,24 +63,17 @@ class StochasticGame:
         return a1, a2
 
     def step(self, s, a1, a2):
-        # TODO: Give probabilty of that transition
-        # next_s1, next_s2, reward, prob = self.transition.transition(self, s, a1, a2)
-
         # Get num of time steps
-        t = len(s.history)
+        t = len(s.history) + 1 # prevent div by 0 as first step should be 1
 
-        # Dummy for testing
-        next_s1 = random.choice(list(self.p1_states))
-        next_s2 = random.choice(list(self.p2_states))
-        prob = 1/len(self.p1_states)
-        r = random.randint(0, 10)
-        reward = (r, -r)
+        # Call transition func
+        next_s1, next_s2, r1, r2, prob = self.transition.next_state((self.time_step, t), s, a1, a2)
 
         # Construct next state
         next_history = s.history + [((s.s1, a1), (s.s2, a2))]
         next_s = GameState(next_s1, next_s2, next_history)
 
-        return next_s, reward, prob
+        return next_s, (r1, r2), prob
 
 if __name__ == '__main__':
     p1, p2 = (1, 2), (1, 2) 
@@ -84,5 +81,12 @@ if __name__ == '__main__':
     # Depth is based on number of time steps per day
     t = 10 * 60 # 10 mins
     d = (24 * 60 * 60) / t # 10 min steps -> 144 layers
-    # transition = Transition(p1, p2, t)
-    game = StochasticGame(p1, p2, d, t, transition=None)
+
+    # Setup transition info
+    zones = load_zones('../data/zones/example_zones/example_network/node_zone_info.csv')
+    demands = [load_demand('../data/demand/example_demand/matched/example_network/example_100.csv')]
+    graph = load_graph('../data/networks/example_network/base/nodes.csv', '../data/networks/example_network/base/edges.csv')
+    transition = Transition(p1, p2, graph, zones, demands)
+
+    # Create game
+    game = StochasticGame(p1, p2, d, t, transition=transition)

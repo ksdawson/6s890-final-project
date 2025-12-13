@@ -7,6 +7,7 @@ from mccfr import MonteCarloCFR
 import numpy as np
 from utils import state_space_size
 from game import StochasticGame
+from transition_func import load_demand, load_graph, load_zones, Transition
 
 class RegretNetwork(nn.Module):
     def __init__(self, num_actions, input_size, hidden_size=256):
@@ -234,7 +235,18 @@ class DeepCFR:
                 total_loss += loss.item()
 
 if __name__ == '__main__':
-    p1, p2 = (1, 2), (1, 2)
-    game = StochasticGame(p1, p2, depth=3, t=None, transition=None)
+    # Reduced depth for debugging
+    p1, p2 = (1, 5), (1, 5)
+    depth = 1
+
+    # Setup transition info
+    zones = load_zones('../data/zones/example_zones/example_network/node_zone_info.csv')
+    demands = [load_demand('../data/demand/example_demand/matched/example_network/example_100.csv')]
+    graph = load_graph('../data/networks/example_network/base/nodes.csv', '../data/networks/example_network/base/edges.csv')
+    transition = Transition(p1, p2, graph, zones, demands)
+
+    # Create game
+    game = StochasticGame(p1, p2, depth, 600, transition=transition)
+    
     deepcfr = DeepCFR(game)
     deepcfr.train(5, 100)
