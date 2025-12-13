@@ -1,5 +1,6 @@
 import random
 import csv
+import math
 import networkx as nx
 from game import GameState, StochasticGame
 
@@ -71,7 +72,14 @@ def serve_randomly(remaining, caps):
     assignments = {1: 0, 2: 0}
     players = [p for p, c in caps.items() if c > 0]
 
+    # Start with log probability of 0 (which is probability 1.0)
+    log_prob_assignment = 0.0
+
     while remaining > 0 and players:
+        # The probability of picking this specific player is 1 / len(players)
+        # Log prob is -log(len(players))
+        log_prob_assignment += -math.log(len(players))
+
         p = random.choice(players)
         caps[p] -= 1
         assignments[p] += 1
@@ -80,7 +88,7 @@ def serve_randomly(remaining, caps):
         if caps[p] == 0:
             players.remove(p)
 
-    return remaining, caps, assignments
+    return remaining, caps, assignments, log_prob_assignment
 
 class Transition:
     def __init__(self, p1, p2, graph, zones, demands):
@@ -205,6 +213,8 @@ class Transition:
                     assignments_log.append((future_t, player, dst_zone, 1))
         
         # Sample from demand distribution
+        prob_demand_sample = 1.0 / len(self.demands)
+        total_log_prob = math.log(prob_demand_sample)
         demand = random.choice(self.demands)
 
         # Get all the requests between the last time step and this time step
@@ -251,9 +261,12 @@ class Transition:
 
             # Match with idle vehicles in same zone first
             caps = {1: new_s1[zone_idx], 2: new_s2[zone_idx]}
-            remaining, caps, assigns = serve_randomly(remaining, caps)
+            remaining, caps, assigns, log_p_assign = serve_randomly(remaining, caps)
             new_s1[zone_idx] = caps[1]
             new_s2[zone_idx] = caps[2]
+
+            # Add the log prob from this zone to the total
+            total_log_prob += log_p_assign
 
             # Update log
             ride_idx = 0
@@ -311,9 +324,12 @@ class Transition:
                     break
                 idx = other_id - 1
                 caps = {1: new_s1[idx], 2: new_s2[idx]}
-                remaining, caps, assigns = serve_randomly(remaining, caps)
+                remaining, caps, assigns, log_p_assign = serve_randomly(remaining, caps)
                 new_s1[idx] = caps[1]
                 new_s2[idx] = caps[2]
+
+                # Add the log prob from this spillover event
+                total_log_prob += log_p_assign
 
                 # Update log
                 for player, cnt in assigns.items():
@@ -354,7 +370,10 @@ class Transition:
                 self.state_history[future_t] = {}
             self.state_history[future_t][(player, zone_id)] = self.state_history[future_t].get((player, zone_id), 0) + 1
 
-        return new_s1, new_s2, reward[1], reward[2], None # TODO: how to calculate chance prob?
+        # Return the probability in normal space (exp)
+        final_prob = math.exp(total_log_prob)
+
+        return new_s1, new_s2, reward[1], reward[2], final_prob
 
 if __name__ == '__main__':
     # Setup transition info
