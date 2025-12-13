@@ -7,7 +7,7 @@ from mccfr import MonteCarloCFR
 import numpy as np
 from utils import state_space_size, time_func
 from game import StochasticGame
-from transition_func import load_demand, load_graph, load_zones, Transition
+from transition import load_demand, load_graph, load_zones, Transition
 
 class RegretNetwork(nn.Module):
     def __init__(self, num_actions, num_input_slots, num_embeddings, embedding_dim=16, hidden_size=256):
@@ -39,6 +39,7 @@ class PolicyNetwork(nn.Module):
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         self.flat_input_size = num_input_slots * embedding_dim
 
+        self.fc1 = nn.Linear(self.flat_input_size, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
         self.fc4 = nn.Linear(hidden_size, hidden_size)
@@ -263,10 +264,25 @@ class DeepCFR:
                 optimizer.step()
                 
                 total_loss += loss.item()
+        
+    def save_policy(self, path='policy.pth'):
+        '''Saves the policy network weights to a file.'''
+        # It is good practice to save the state_dict rather than the entire object
+        torch.save(self.policy_net.state_dict(), path)
+        print(f'Policy network saved to {path}')
+
+    def load_policy(self, path='policy.pth'):
+        '''Loads weights from a file into the policy network.'''
+        # map_location ensures we can load a GPU model onto a CPU if needed
+        checkpoint = torch.load(path, map_location=self.device)
+        self.policy_net.load_state_dict(checkpoint)
+        
+        # Set to eval mode (important for inference/playing)
+        self.policy_net.eval() 
+        print(f'Policy network loaded from {path}')
 
 if __name__ == '__main__':
-    # Reduced depth for debugging
-    p1, p2 = (10, 5), (10, 5)
+    p1, p2 = (5, 5), (5, 5)
     t = 60 * 60 # 60 mins
     depth = (24 * 60 * 60) // t # 60 min steps -> 24 layers
 
@@ -281,3 +297,6 @@ if __name__ == '__main__':
     
     deepcfr = DeepCFR(game)
     time_func(deepcfr.train, {'iters': 5, 'traversals_per_iter': 100})
+
+    # Save the policy
+    deepcfr.save_policy('example_network_5c5z60m.pth')

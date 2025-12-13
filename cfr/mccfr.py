@@ -1,6 +1,6 @@
 import random
 from game import StochasticGame
-from transition_func import load_demand, load_graph, load_zones, Transition
+from transition import load_demand, load_graph, load_zones, Transition
 
 class MonteCarloCFR:
     def __init__(self, game, deep_cfr=False, model=None):
@@ -30,9 +30,6 @@ class MonteCarloCFR:
         for i in range(iters):
             self.traverse(self.game.initial_state(), p=1, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
             self.traverse(self.game.initial_state(), p=2, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
-
-            # Reset game if need be (i.e. end of day/hand)
-            self.game.reset_game()
         # Compute the average strategy for each info set
         self.average_strategy()
 

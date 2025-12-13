@@ -1,5 +1,5 @@
 import random
-from transition_func import Transition, load_demand, load_zones, load_graph
+from transition import Transition, load_demand, load_zones, load_graph
 
 def get_combos(target, num_slots, current_combo=None):
     if current_combo is None:
@@ -12,9 +12,10 @@ def get_combos(target, num_slots, current_combo=None):
         yield from get_combos(target - i, num_slots - 1, current_combo + [i])
 
 class GameState:
-    def __init__(self, s1, s2, history=None):
+    def __init__(self, s1, s2, assignments=None, history=None):
         self.s1 = s1
         self.s2 = s2
+        self.assignments = assignments or {}
         self.history = history or []
 
     def infoset_key(self, player):
@@ -47,10 +48,6 @@ class StochasticGame:
         self.transition = transition
         self.root = GameState(random.choice(list(self.p1_states)), random.choice(list(self.p2_states)))
 
-    def reset_game(self):
-        # Reset transition history
-        self.transition.state_history = {}
-
     def initial_state(self):
         return self.root
 
@@ -67,11 +64,11 @@ class StochasticGame:
         t = len(s.history) + 1 # prevent div by 0 as first step should be 1
 
         # Call transition func
-        next_s1, next_s2, r1, r2, prob = self.transition.next_state((self.time_step, t), s, a1, a2)
+        next_s1, next_s2, r1, r2, prob, assigns = self.transition.next_state((self.time_step, t), s, a1, a2)
 
         # Construct next state
         next_history = s.history + [((s.s1, a1), (s.s2, a2))]
-        next_s = GameState(next_s1, next_s2, next_history)
+        next_s = GameState(next_s1, next_s2, assigns, next_history)
 
         return next_s, (r1, r2), prob
 
