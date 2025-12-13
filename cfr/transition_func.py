@@ -68,17 +68,19 @@ def serve_randomly(remaining, caps):
     Returns:
         updated remaining, updated caps
     '''
+    assignments = {'p1': 0, 'p2': 0}
     players = [p for p, c in caps.items() if c > 0]
 
     while remaining > 0 and players:
         p = random.choice(players)
         caps[p] -= 1
+        assignments[p] += 1
         remaining -= 1
 
         if caps[p] == 0:
             players.remove(p)
 
-    return remaining, caps
+    return remaining, caps, assignments
 
 class Transition:
     def __init__(self, graph, zones, demands):
@@ -90,17 +92,22 @@ class Transition:
         self.state_history = {}
         self.zones = zones
         self.demands = demands
-
-    def travel_time(self, src_zone, dst_zone, zone_rep):
+        
+    def travel_time(self, src, dst):
         try:
             return nx.shortest_path_length(
                 self.graph,
-                zone_rep[src_zone],
-                zone_rep[dst_zone],
-                weight="travel_time",
+                src,
+                dst,
+                weight='travel_time',
             )
         except nx.NetworkXNoPath:
-            return float("inf")
+            return float('inf')
+        
+    def get_zone(self, node):
+        for zone_id, zone in self.zones.items():
+            if node in zone:
+                return zone_id
 
     def next_state(self, t, s, a1, a2):
         time_idx, time_step = t
@@ -125,28 +132,59 @@ class Transition:
         demand_by_zones = {zone_id:set() for zone_id in self.zones}
         for req in curr_demand:
             req_t, src, dst = req
-            for zone_id, zone in self.zones.items():
-                if src in zone:
-                    demand_by_zones[zone_id].add(req)
+            zone_id = self.get_zone(src)
+            demand_by_zones[zone_id].add(req)
 
         # Copy state (capacities per zone)
         new_s1, new_s2 = list(s.s1), list(s.s2)
+
+        # Apply completed rides (vehicles becoming idle again)
+        if time_idx in self.state_history:
+            for (player, zone_id), count in self.state_history[time_idx].items():
+                idx = zone_id - 1
+                if player == 'p1':
+                    new_s1[idx] += count
+                else:
+                    new_s2[idx] += count
+            del self.state_history[time_idx]
 
         # Precompute representative node per zone (for distance calc)
         zone_rep = {
             zid: next(iter(nodes)) for zid, nodes in self.zones.items()
         }
 
+        # Keep track of assignments for vehicles becoming idle again
+        assignments_log = []
+
         # For each zone, match demand
         for zone_id, zone_demand in demand_by_zones.items():
+            zone_demand = list(zone_demand)
             zone_idx = zone_id - 1
             remaining = len(zone_demand)
 
             # Match with idle vehicles in same zone first
             caps = {'p1': new_s1[zone_idx], 'p2': new_s2[zone_idx]}
-            remaining, caps = serve_randomly(remaining, caps)
+            remaining, caps, assigns = serve_randomly(remaining, caps)
             new_s1[zone_idx] = caps['p1']
             new_s2[zone_idx] = caps['p2']
+
+            # Update log
+            ride_idx = 0
+            for player, cnt in assigns.items():
+                for _ in range(cnt):
+                    if ride_idx >= len(zone_demand):
+                        break
+                    req_t, src, dst = zone_demand[ride_idx]
+                    ride_idx += 1
+
+                    travel = self.travel_time(src, dst)
+                    future_t = time_idx + max(1, int(travel // time_step))
+                    dst_zone = self.get_zone(dst)
+
+                    if dst_zone is None:
+                        continue  # or raise error
+
+                    assignments_log.append((future_t, player, dst_zone, 1))
 
             # If demand met keep going
             if remaining == 0:
@@ -178,16 +216,37 @@ class Transition:
                     break
                 idx = other_id - 1
                 caps = {'p1': new_s1[idx], 'p2': new_s2[idx]}
-                remaining, caps = serve_randomly(remaining, caps)
+                remaining, caps, assigns = serve_randomly(remaining, caps)
                 new_s1[idx] = caps['p1']
                 new_s2[idx] = caps['p2']
+
+                # Update log
+                for player, cnt in assigns.items():
+                    for _ in range(cnt):
+                        if ride_idx >= len(zone_demand):
+                            break
+                        req_t, src, dst = zone_demand[ride_idx]
+                        ride_idx += 1
+
+                        travel = self.travel_time(src, dst)
+                        future_t = time_idx + max(1, int(travel // time_step))
+                        dst_zone = self.get_zone(dst)
+
+                        if dst_zone is None:
+                            continue  # or raise error
+
+                        assignments_log.append((future_t, player, dst_zone, 1))
 
         # Apply repositioning actions (simple additive model w/ cap at 0)
         for i in range(len(new_s1)):
             new_s1[i] = max(0, new_s1[i] + a1[i])
             new_s2[i] = max(0, new_s2[i] + a2[i])
 
-        # TODO: Update state w/ (t, s, a1, a2) mapped to assigned rides
+        # Update history
+        for future_t, player, zone_id, cnt in assignments_log:
+            if future_t not in self.state_history:
+                self.state_history[future_t] = {}
+            self.state_history[future_t][(player, zone_id)] = self.state_history[future_t].get((player, zone_id), 0) + 1
 
 if __name__ == '__main__':
     # Setup transition
