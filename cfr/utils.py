@@ -31,7 +31,7 @@ def get_infoset_count(p, q, depth):
     return total_infosets
 
 if __name__ == '__main__':   
-    p, q = 1, 5
+    p, q = 10, 5
     d = 1
     count = get_infoset_count(p, q, d)
 

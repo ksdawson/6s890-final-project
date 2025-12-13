@@ -10,9 +10,12 @@ from game import StochasticGame
 from transition_func import load_demand, load_graph, load_zones, Transition
 
 class RegretNetwork(nn.Module):
-    def __init__(self, num_actions, input_size, hidden_size=256):
+    def __init__(self, num_actions, num_input_slots, num_embeddings, embedding_dim=16, hidden_size=256):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.flat_input_size = num_input_slots * embedding_dim
+        
+        self.fc1 = nn.Linear(self.flat_input_size, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
         self.fc4 = nn.Linear(hidden_size, hidden_size)
@@ -20,6 +23,9 @@ class RegretNetwork(nn.Module):
         self.fc6 = nn.Linear(hidden_size, num_actions)
         
     def forward(self, x):
+        x = self.embedding(x)
+        x = x.view(x.size(0), -1)
+
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
@@ -28,9 +34,11 @@ class RegretNetwork(nn.Module):
         return self.fc6(x)
 
 class PolicyNetwork(nn.Module):
-    def __init__(self, num_actions, input_size, hidden_size=256):
+    def __init__(self, num_actions, num_input_slots, num_embeddings, embedding_dim=16, hidden_size=256):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.flat_input_size = num_input_slots * embedding_dim
+
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
         self.fc4 = nn.Linear(hidden_size, hidden_size)
@@ -38,6 +46,9 @@ class PolicyNetwork(nn.Module):
         self.fc6 = nn.Linear(hidden_size, num_actions)
         
     def forward(self, x):
+        x = self.embedding(x)
+        x = x.view(x.size(0), -1)
+
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
@@ -57,45 +68,45 @@ def flatten(item):
 def infoset_to_tensor(infoset, num_states, max_history_length, state_len, num_players=2, device='cpu'):
     player, player_s, player_history = infoset
     
-    # Flatten all inputs just to be safe
+    # Flatten inputs
     flat_player_s = flatten(player_s)
     flat_history = [flatten(h) for h in player_history]
 
-    # Calculate vector size
-    state_block_size = num_states * state_len
-    total_size = num_players + state_block_size + (max_history_length * state_block_size)
+    # Calculate number of slots
+    total_slots = 1 + state_len + (max_history_length * state_len)
     
-    # Setup features
-    features = np.zeros(total_size, dtype=np.float32)
+    # Create indices array
+    indices = np.zeros(total_slots, dtype=np.int64)
     current_idx = 0
     
+    # We define the maximum allowed index
+    # (Must match num_embeddings in the network initialization)
+    MAX_VALID_INDEX = num_states 
+    
     # Encode player
-    p_idx = player - 1 
-    if 0 <= p_idx < num_players:
-        features[current_idx + p_idx] = 1.0
-    current_idx += num_players
+    indices[current_idx] = max(0, min(player - 1, MAX_VALID_INDEX)) 
+    current_idx += 1
     
-    # Encode current local state
+    # Encode local state
     for i, val in enumerate(flat_player_s):
-        if i >= state_len: break 
-        if isinstance(val, int) and 0 <= val < num_states:
-            features[current_idx + (i * num_states) + val] = 1.0       
-    current_idx += state_block_size
+        if i >= state_len: break
+        if isinstance(val, int):
+            safe_val = max(0, min(val, MAX_VALID_INDEX))
+            indices[current_idx + i] = safe_val
+    current_idx += state_len
     
-    # Encode history sequence
+    # Encode history
     for t, state_list in enumerate(flat_history):
         if t >= max_history_length: break
         
-        time_offset = t * state_block_size
-        
+        time_offset = t * state_len
         for i, val in enumerate(state_list):
             if i >= state_len: break
-            
-            if isinstance(val, int) and 0 <= val < num_states:
-                features[current_idx + time_offset + (i * num_states) + val] = 1.0
-            
-    # Convert to tensor
-    tensor = torch.tensor(features, dtype=torch.float32).unsqueeze(0)
+            if isinstance(val, int):
+                safe_val = max(0, min(val, MAX_VALID_INDEX))
+                indices[current_idx + time_offset + i] = safe_val
+
+    tensor = torch.tensor(indices, dtype=torch.long).unsqueeze(0)
     return tensor.to(device)
 
 class DeepCFR:
@@ -110,9 +121,24 @@ class DeepCFR:
         self.mccfr = MonteCarloCFR(game, deep_cfr=True, model=self.model)
 
         # Value Network predicts advantages/regrets (Unbounded)
-        self.value_net = RegretNetwork(self.num_states, self.input_size) # states is an upper bound on actions
+        self.num_slots = 1 + self.state_len + (self.game.max_depth * self.state_len)
+        # Pick an embedding dimension (Tune this! 8 to 64 is usually good)
+        EMBED_DIM = 16 
+        # Pass the total distinct values (num_states) so the embedding layer knows how big the dictionary is
+        self.value_net = RegretNetwork(
+            num_actions=self.num_states, 
+            num_input_slots=self.num_slots, 
+            num_embeddings=self.num_states + 1, # +1 for safety/padding
+            embedding_dim=EMBED_DIM
+        )
+
         # Policy Network predicts the average strategy (Probability distribution)
-        self.policy_net = PolicyNetwork(self.num_states, self.input_size)
+        self.policy_net = PolicyNetwork(
+            self.num_states,
+            self.num_slots,
+            num_embeddings=self.num_states + 1,
+            embedding_dim=EMBED_DIM
+        )
         
         # Define Optimizers
         self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=0.001)
