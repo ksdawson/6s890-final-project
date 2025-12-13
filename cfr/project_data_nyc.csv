@@ -1,4 +1,4 @@
-time,origin_zone,dest_zone,counts
+time,origin_zone,dest_zone,counts_per_day
 56400,2,2,"[3, 1, 1, 0, 0, 0, 2]"
 62400,0,0,"[1, 0, 1, 1, 2, 0, 0]"
 1200,1,0,"[2, 1, 1, 0, 1, 1, 2]"
