@@ -68,7 +68,7 @@ def serve_randomly(remaining, caps):
     Returns:
         updated remaining, updated caps
     '''
-    assignments = {'p1': 0, 'p2': 0}
+    assignments = {1: 0, 2: 0}
     players = [p for p, c in caps.items() if c > 0]
 
     while remaining > 0 and players:
@@ -83,11 +83,13 @@ def serve_randomly(remaining, caps):
     return remaining, caps, assignments
 
 class Transition:
-    def __init__(self, graph, zones, demands):
+    def __init__(self, p1, p2, graph, zones, demands):
         '''
         :param zones: dict mapping zone id to set of node ids
         :param demands: list of demand days; demand is a list of t, src, dst
         '''
+        self.p1 = p1
+        self.p2 = p2
         self.graph = graph
         self.state_history = {}
         self.zones = zones
@@ -111,6 +113,27 @@ class Transition:
 
     def next_state(self, t, s, a1, a2):
         time_idx, time_step = t
+
+        # Keep track of assignments for vehicles becoming idle again
+        assignments_log = []
+
+        # On first time step handle missing vehicles
+        if time_idx == 1:
+            veh_cnt = {1: sum(s.s1), 2: sum(s.s2)}
+            for fut_time_idx in self.state_history:
+                for (player, zone_id), count in self.state_history[fut_time_idx].items():
+                    veh_cnt[player] += count
+            for player in (1,2):
+                veh_diff = self.p1[0] - veh_cnt[1] if player == 1 else self.p2[0] - veh_cnt[2]
+                for i in range(0, veh_diff):
+                    sample_req = random.choice(random.choice(self.demands))
+                    req_t, src, dst = sample_req
+                    travel = self.travel_time(src, dst)
+                    future_t = time_idx + max(1, int(travel // time_step))
+                    dst_zone = self.get_zone(dst)
+                    if dst_zone is None:
+                        continue
+                    assignments_log.append((future_t, player, dst_zone, 1))
         
         # Sample from demand distribution
         demand = random.choice(self.demands)
@@ -142,7 +165,7 @@ class Transition:
         if time_idx in self.state_history:
             for (player, zone_id), count in self.state_history[time_idx].items():
                 idx = zone_id - 1
-                if player == 'p1':
+                if player == 1:
                     new_s1[idx] += count
                 else:
                     new_s2[idx] += count
@@ -153,9 +176,6 @@ class Transition:
             zid: next(iter(nodes)) for zid, nodes in self.zones.items()
         }
 
-        # Keep track of assignments for vehicles becoming idle again
-        assignments_log = []
-
         # For each zone, match demand
         for zone_id, zone_demand in demand_by_zones.items():
             zone_demand = list(zone_demand)
@@ -163,10 +183,10 @@ class Transition:
             remaining = len(zone_demand)
 
             # Match with idle vehicles in same zone first
-            caps = {'p1': new_s1[zone_idx], 'p2': new_s2[zone_idx]}
+            caps = {1: new_s1[zone_idx], 2: new_s2[zone_idx]}
             remaining, caps, assigns = serve_randomly(remaining, caps)
-            new_s1[zone_idx] = caps['p1']
-            new_s2[zone_idx] = caps['p2']
+            new_s1[zone_idx] = caps[1]
+            new_s2[zone_idx] = caps[2]
 
             # Update log
             ride_idx = 0
@@ -210,15 +230,15 @@ class Transition:
                     continue
             other_zones.sort()
 
-            # Server to other zones
+            # Serve to other zones
             for _, other_id in other_zones:
                 if remaining == 0:
                     break
                 idx = other_id - 1
-                caps = {'p1': new_s1[idx], 'p2': new_s2[idx]}
+                caps = {1: new_s1[idx], 2: new_s2[idx]}
                 remaining, caps, assigns = serve_randomly(remaining, caps)
-                new_s1[idx] = caps['p1']
-                new_s2[idx] = caps['p2']
+                new_s1[idx] = caps[1]
+                new_s2[idx] = caps[2]
 
                 # Update log
                 for player, cnt in assigns.items():
@@ -249,11 +269,10 @@ class Transition:
             self.state_history[future_t][(player, zone_id)] = self.state_history[future_t].get((player, zone_id), 0) + 1
 
 if __name__ == '__main__':
-    # Setup transition
+    # Setup transition info
     zones = load_zones('../data/zones/example_zones/example_network/node_zone_info.csv')
     demands = [load_demand('../data/demand/example_demand/matched/example_network/example_100.csv')]
     graph = load_graph('../data/networks/example_network/base/nodes.csv', '../data/networks/example_network/base/edges.csv')
-    transition = Transition(graph, zones, demands)
     
     # Setup example state for debugging
     p, q = 3, len(zones)
@@ -263,4 +282,6 @@ if __name__ == '__main__':
     a1, a2 = random.choice(actions), random.choice(actions)
 
     # Test getting next state
+    p1, p2 = (p,q), (p,q)
+    transition = Transition(p1, p2, graph, zones, demands)
     next_s = transition.next_state((1, 600), s, a1, a2)
