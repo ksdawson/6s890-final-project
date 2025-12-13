@@ -161,7 +161,11 @@ class DeepCFR:
             )
             
             # Optional: Clear policy samples if memory is an issue
-            # self.mccfr.policy_samples = []
+            MAX_POLICY_SAMPLES = 20000
+            if len(self.mccfr.policy_samples) > MAX_POLICY_SAMPLES:
+                # Randomly sample to keep size manageable
+                indices = np.random.choice(len(self.mccfr.policy_samples), MAX_POLICY_SAMPLES, replace=False)
+                self.mccfr.policy_samples = [self.mccfr.policy_samples[i] for i in indices]
 
     def train_network(self, model, optimizer, data, batch_size, is_policy=False):
         if not data:
