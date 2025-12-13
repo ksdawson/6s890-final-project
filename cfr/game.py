@@ -62,6 +62,9 @@ class StochasticGame:
         # TODO: Give probabilty of that transition
         # next_s1, next_s2, reward, prob = self.transition.transition(self, s, a1, a2)
 
+        # Get num of time steps
+        t = len(s.history)
+
         # Dummy for testing
         next_s1 = random.choice(list(self.p1_states))
         next_s2 = random.choice(list(self.p2_states))
