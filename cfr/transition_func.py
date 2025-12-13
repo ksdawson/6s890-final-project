@@ -264,7 +264,11 @@ class Transition:
                     req_t, src, dst = zone_demand[ride_idx]
                     ride_idx += 1
 
-                    travel = self.travel_time(src, dst)
+                    # Calculate pickup time
+                    pickup_time = self.travel_time(self.zone_rep[zone_id], src)
+                    # Calculate trip time
+                    trip_time = self.travel_time(src, dst)
+                    travel = pickup_time + trip_time
                     future_t = time_idx + max(1, int(travel // time_step))
                     dst_zone = self.get_zone(dst)
 
@@ -292,8 +296,8 @@ class Transition:
                 try:
                     dist = nx.shortest_path_length(
                         self.graph,
-                        src_node,
                         other_node,
+                        src_node,
                         weight='distance',
                     )
                     other_zones.append((dist, other_id))
@@ -319,7 +323,11 @@ class Transition:
                         req_t, src, dst = zone_demand[ride_idx]
                         ride_idx += 1
 
-                        travel = self.travel_time(src, dst)
+                        # Calculate pickup time
+                        pickup_time = self.travel_time(self.zone_rep[other_id], src)
+                        # Calculate trip time
+                        trip_time = self.travel_time(src, dst)
+                        travel = pickup_time + trip_time
                         future_t = time_idx + max(1, int(travel // time_step))
                         dst_zone = self.get_zone(dst)
 
