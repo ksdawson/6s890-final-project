@@ -106,8 +106,13 @@ class Transition:
             zid: next(iter(nodes)) for zid, nodes in self.zones.items()
         }
 
-        # Cache
+        # Caches
         self.cache = {}
+        self.node_to_zone = {node: zid for zid, nodes in self.zones.items() for node in nodes}
+        self.zone_dist = {
+            (z1, z2): nx.shortest_path_length(self.graph, n1, n2, weight='distance')
+            for z1, n1 in self.zone_rep.items() for z2, n2 in self.zone_rep.items()
+        }
         
     def travel_time(self, src, dst):
         if (src, dst) in self.cache:
@@ -124,11 +129,6 @@ class Transition:
             return dist
         except nx.NetworkXNoPath:
             return float('inf')
-        
-    def get_zone(self, node):
-        for zone_id, zone in self.zones.items():
-            if node in zone:
-                return zone_id
             
     def apply_repositioning(self, player, new_s, a, t):
         """
@@ -172,8 +172,8 @@ class Transition:
             new_s_post_action[src] -= flow
 
             # Schedule return at destination
-            src_zone_id = self.get_zone(src)
-            dst_zone_id = self.get_zone(dst)
+            src_zone_id = self.node_to_zone[src]
+            dst_zone_id = self.node_to_zone[dst]
             src_node = self.zone_rep[src_zone_id]
             dst_node = self.zone_rep[dst_zone_id]
 
@@ -215,7 +215,7 @@ class Transition:
                     req_t, src, dst = sample_req
                     travel = self.travel_time(src, dst)
                     future_t = time_idx + max(1, int(travel // time_step))
-                    dst_zone = self.get_zone(dst)
+                    dst_zone = self.node_to_zone[dst]
                     if dst_zone is None:
                         continue
                     assignments_log.append((future_t, player, dst_zone, 1))
@@ -242,7 +242,7 @@ class Transition:
         demand_by_zones = {zone_id:set() for zone_id in self.zones}
         for req in curr_demand:
             req_t, src, dst = req
-            zone_id = self.get_zone(src)
+            zone_id = self.node_to_zone[src]
             demand_by_zones[zone_id].add(req)
 
         # Copy state (capacities per zone)
@@ -291,7 +291,7 @@ class Transition:
                     trip_time = self.travel_time(src, dst)
                     travel = pickup_time + trip_time
                     future_t = time_idx + max(1, int(travel // time_step))
-                    dst_zone = self.get_zone(dst)
+                    dst_zone = self.node_to_zone[dst]
 
                     if dst_zone is None:
                         continue  # or raise error
@@ -310,20 +310,7 @@ class Transition:
             src_node = self.zone_rep[zone_id]
 
             # Sort other zones by network distance
-            other_zones = []
-            for other_id, other_node in self.zone_rep.items():
-                if other_id == zone_id:
-                    continue
-                try:
-                    dist = nx.shortest_path_length(
-                        self.graph,
-                        other_node,
-                        src_node,
-                        weight='distance',
-                    )
-                    other_zones.append((dist, other_id))
-                except nx.NetworkXNoPath:
-                    continue
+            other_zones = [(self.zone_dist[(other_id, zone_id)], other_id) for other_id in self.zone_rep if other_id != zone_id]
             other_zones.sort()
 
             # Serve to other zones
@@ -351,7 +338,7 @@ class Transition:
                         trip_time = self.travel_time(src, dst)
                         travel = pickup_time + trip_time
                         future_t = time_idx + max(1, int(travel // time_step))
-                        dst_zone = self.get_zone(dst)
+                        dst_zone = self.node_to_zone[dst]
 
                         if dst_zone is None:
                             continue  # or raise error

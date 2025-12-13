@@ -237,7 +237,7 @@ class DeepCFR:
 if __name__ == '__main__':
     # Reduced depth for debugging
     p1, p2 = (1, 5), (1, 5)
-    depth = 1
+    depth = 3
 
     # Setup transition info
     zones = load_zones('../data/zones/example_zones/example_network/node_zone_info.csv')
