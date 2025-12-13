@@ -2,11 +2,19 @@ import random
 from game import StochasticGame
 
 class MonteCarloCFR:
-    def __init__(self, game):
+    def __init__(self, game, deep_cfr=False, model=None):
         self.game = game
         self.regret_sum = {} # R[I][a]
         self.strategy_sum = {} # s[I][a]
         self.strategy = {} # S[I][a]
+
+        # Deep CFR handling
+        if deep_cfr:
+            # Buffers to store data for NN training
+            self.regret_samples = [] # RS[I]
+            self.policy_samples = [] # PS[I]
+            self.model = model
+        self.deep_cfr = deep_cfr
 
     def average_strategy(self):
         for i, strategy in self.strategy_sum.items():
@@ -81,8 +89,24 @@ class MonteCarloCFR:
             # Update strategy
             self.strategy_sum[infoset][a] += (pi_past_player * sigma[a]) / pi_total
 
+            # Handle Deep CFR
+            if self.deep_cfr:
+                # Add samples for training
+                regret_vec = [self.regret_sum[infoset][a] for a in actions]
+                self.regret_samples.append((infoset, regret_vec))
+                strategy_vec = [self.strategy_sum[infoset][a] for a in actions]
+                self.policy_samples.append((infoset, strategy_vec))
+
     def sample_action(self, actions, sigma):
         return random.choices(actions, weights=[sigma[a] for a in actions], k=1)[0]
+    
+    def get_regrets(self, s, p, infoset):
+        if self.deep_cfr:
+            regret_vector = self.model(infoset)
+            regrets = {a: r for a, r in zip(self.game.actions(s)[p-1], regret_vector)}
+            return regrets
+        else:
+            return self.regret_sum[infoset]
 
     def traverse(self, s, p,
         past_u, past_pi_p1, past_pi_p2, past_pi_chance
@@ -96,8 +120,8 @@ class MonteCarloCFR:
         infoset_2, actions_2 = self.update_infosets(s, 2)
 
         # Get strategies for both players
-        sigma_1 = self.regret_matching(self.regret_sum[infoset_1])
-        sigma_2 = self.regret_matching(self.regret_sum[infoset_2])
+        sigma_1 = self.regret_matching(self.get_regrets(s, 1, infoset_1))
+        sigma_2 = self.regret_matching(self.get_regrets(s, 2, infoset_2))
 
         # Sample actions from strategies
         a1_sampled = self.sample_action(actions_1, sigma_1)
@@ -111,7 +135,7 @@ class MonteCarloCFR:
         next_s, (r1, r2), chance_prob = self.game.step(s, a1_sampled, a2_sampled)
 
         # Calculate discounted reward for this node
-        curr_u = self.game.gamma * (r1 if p == 1 else r2)
+        curr_u = r1 if p == 1 else r2
 
         # Recurse to get the future trajectory payoff and prob's
         fut_u, fut_pi_p1, fut_pi_p2, fut_pi_chance = self.traverse(next_s, p,
@@ -126,7 +150,7 @@ class MonteCarloCFR:
         pi_total_opp_chance = (total_pi_p2 if p == 1 else total_pi_p1) * total_pi_chance
 
         # Get total utility
-        total_u = past_u + curr_u + fut_u
+        total_u = past_u + curr_u + self.game.gamma * fut_u
 
         # Update regret for each action in infoset and strategy for infoset
         if p == 1:
