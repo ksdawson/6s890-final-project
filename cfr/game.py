@@ -1,5 +1,5 @@
 import random
-from transition import Transition
+# from transition import Transition
 
 def get_combos(target, num_slots, current_combo=None):
     if current_combo is None:
@@ -59,14 +59,21 @@ class StochasticGame:
         return a1, a2
 
     def step(self, s, a1, a2):
-        # Give probabilty of that transition
-        next_s1, next_s2, reward, prob = self.transition.transition(self, s, a1, a2)
+        # TODO: Give probabilty of that transition
+        # next_s1, next_s2, reward, prob = self.transition.transition(self, s, a1, a2)
+
+        # Dummy for testing
+        next_s1 = random.choice(list(self.p1_states))
+        next_s2 = random.choice(list(self.p2_states))
+        prob = 1/len(self.p1_states)
+        r = random.randint(0, 10)
+        reward = (r, -r)
 
         # Construct next state
         next_history = s.history + [((s.s1, a1), (s.s2, a2))]
         next_s = GameState(next_s1, next_s2, next_history)
 
-        return next_s, reward
+        return next_s, reward, prob
 
 if __name__ == '__main__':
     p1, p2 = (1, 2), (1, 2) 
@@ -74,5 +81,5 @@ if __name__ == '__main__':
     # Depth is based on number of time steps per day
     t = 10 * 60 # 10 mins
     d = (24 * 60 * 60) / t # 10 min steps -> 144 layers
-    transition = Transition(p1, p2, t)
-    game = StochasticGame(p1, p2, d, t, transition)
+    # transition = Transition(p1, p2, t)
+    game = StochasticGame(p1, p2, d, t, transition=None)

@@ -27,7 +27,7 @@ class MonteCarloCFR:
     def update_infosets(self, s, p):
         # Get infoset, action for player
         i = s.infoset_key(p)
-        a = self.game.actions(s)
+        a = self.game.actions(s)[p-1]
         # Update infosets
         if i not in self.regret_sum:
             self.regret_sum[i] = {_a:0.0 for _a in a}
@@ -43,7 +43,7 @@ class MonteCarloCFR:
             sigma = {a: 1/len(pos_regrets) for a, r in pos_regrets.items()}
         return sigma
     
-    def counterfactual_regret(a, a_sampled, sigma, u,
+    def counterfactual_regret(self, a, a_sampled, sigma, u,
         pi_total, pi_total_opp_chance, pi_future_player
     ):
         """
@@ -165,7 +165,7 @@ def print_strategy(trainer):
 if __name__ == '__main__':
     # Reduced depth for debugging
     p1, p2 = (1, 2), (1, 2)
-    game = StochasticGame(p1, p2, depth=3)
+    game = StochasticGame(p1, p2, depth=3, t=None, transition=None)
     
     # Run MCCFR
     mccfr = MonteCarloCFR(game)
