@@ -12,86 +12,130 @@ class MonteCarloCFR:
         for i, strategy in self.strategy_sum.items():
             tot = sum(strategy.values())
             if tot > 0:
-                self.strategy[i] = {a:s/tot for a,s in strategy.items()}
+                self.strategy[i] = {a: s/tot for a, s in strategy.items()}
             else:
-                self.strategy[i] = {a:1/len(strategy) for a,_ in strategy.items()}
+                self.strategy[i] = {a: 1/len(strategy) for a, s in strategy.items()}
 
     def train(self, iters):
         # Run a traversal for each player for each iteration
         for i in range(iters):
-            self.traverse(self.game.initial_state(), p=1, reach_prob=1.0)
-            self.traverse(self.game.initial_state(), p=2, reach_prob=1.0)
-
+            self.traverse(self.game.initial_state(), p=1, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
+            self.traverse(self.game.initial_state(), p=2, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
         # Compute the average strategy for each info set
         self.average_strategy()
 
     def update_infosets(self, s, p):
         # Get infoset, action for player
         i = s.infoset_key(p)
-        a = self.game.actions(s)
-
+        a = self.game.actions(s)[p-1]
         # Update infosets
         if i not in self.regret_sum:
-            self.regret_sum[i] = {a:0.0 for _a in a}
-            self.strategy_sum[i] = {a:0.0 for _a in a}
-
+            self.regret_sum[i] = {_a:0.0 for _a in a}
+            self.strategy_sum[i] = {_a:0.0 for _a in a}
         return i, a
 
     def regret_matching(self, info_set):
-        pos_regrets = {a:max(r,0) for a,r in info_set.items()}
+        pos_regrets = {a: max(r, 0) for a, r in info_set.items()}
         sum_pos_regrets = sum(pos_regrets.values())
         if sum_pos_regrets > 0:
-            sigma = {a:r/sum_pos_regrets for a,r in pos_regrets.items()}
+            sigma = {a: r/sum_pos_regrets for a, r in pos_regrets.items()}
         else:
-            sigma = {a:1/len(pos_regrets) for a,_ in pos_regrets.items()}
+            sigma = {a: 1/len(pos_regrets) for a, r in pos_regrets.items()}
         return sigma
     
-    def update_player(self, i, a, a_sampled, sigma, u, reach_prob):
-        # Counterfactual regret estimator
-        for _a in a:
-            if _a == a_sampled:
-                w = 1.0 / sigma[_a]
-            else:
-                w = 0.0
-            self.regret_sum[i][_a] += w * u - u
-        # Average strategy update (importance weighted)
-        self.strategy_sum[i][a_sampled] += reach_prob / sigma[a_sampled]
+    def counterfactual_regret(self, a, a_sampled, sigma, u,
+        pi_total, pi_total_opp_chance, pi_future_player
+    ):
+        """
+        Computes the counterfactual regret for an action a at info set I in trajectory z.
 
-    def traverse(self, s, p, reach_prob):
+        Args:
+        a -- available action at this info set
+        a_sampled -- action we actually took at this info set in this trajectory
+        sigma -- current strategy for this info set
+        u -- actual payoff we obtained at the end of this trajectory
+        pi_total -- total traj prob (product of player+opp+chance from root to leaf)
+        pi_total_opp_chance -- total traj prob excluding player (product of opp+chance from roof to leaf)
+        pi_future_player -- total prob from here to traj end excluding opp+chance (product of player from here to leaf)
+        """
+        # Calculate importance weighting
+        w_I = (u * pi_total_opp_chance * pi_future_player) / pi_total
+
+        # Calculate cf regret
+        if a == a_sampled:
+            cf_regret = w_I * (1 - sigma[a])
+        else:
+            cf_regret = -w_I * sigma[a]
+        return cf_regret
+    
+    def update_player(self, infoset, actions, a_sampled, sigma, u,
+        pi_total, pi_total_opp_chance, pi_future_player, pi_past_player
+    ):
+        for a in actions:
+            # Get counterfactual regret
+            cf_regret = self.counterfactual_regret(a, a_sampled, sigma, u,
+                pi_total, pi_total_opp_chance, pi_future_player
+            )
+            # Update regret
+            self.regret_sum[infoset][a] += cf_regret
+            # Update strategy
+            self.strategy_sum[infoset][a] += (pi_past_player * sigma[a]) / pi_total
+
+    def sample_action(self, actions, sigma):
+        return random.choices(actions, weights=[sigma[a] for a in actions], k=1)[0]
+
+    def traverse(self, s, p,
+        past_u, past_pi_p1, past_pi_p2, past_pi_chance
+    ):
         # Base case
         if self.game.is_terminal(s):
-            # Reward is accumulated at each step in the recursive return value
-            return 0
+            return 0, 1.0, 1.0, 1.0 # future
         
-        # Update CFR state
-        i1, a1 = self.update_infosets(s, 1)
-        i2, a2 = self.update_infosets(s, 2)
+        # Update CFR state for unseen info sets
+        infoset_1, actions_1 = self.update_infosets(s, 1)
+        infoset_2, actions_2 = self.update_infosets(s, 2)
 
         # Get strategies for both players
-        sigma_1 = self.regret_matching(self.regret_sum[i1])
-        sigma_2 = self.regret_matching(self.regret_sum[i2])
+        sigma_1 = self.regret_matching(self.regret_sum[infoset_1])
+        sigma_2 = self.regret_matching(self.regret_sum[infoset_2])
 
         # Sample actions from strategies
-        a1_sampled = random.choices(a1, weights=[sigma_1[a] for a in a1], k=1)[0]
-        a2_sampled = random.choices(a2, weights=[sigma_2[a] for a in a2], k=1)[0]
+        a1_sampled = self.sample_action(actions_1, sigma_1)
+        a2_sampled = self.sample_action(actions_2, sigma_2)
 
-        # State transition
-        next_s, (r1, r2) = self.game.step(s, a1_sampled, a2_sampled)
+        # Probability of sampled actions
+        a1_sampled_prob = sigma_1[a1_sampled]
+        a2_sampled_prob = sigma_2[a2_sampled]
 
-        # Recursive continuation
-        next_reach = reach_prob * (sigma_2[a2_sampled] if p == 1 else sigma_1[a1_sampled])
-        v_next = self.traverse(next_s, p, next_reach)
+        # Sample from chance for next state
+        next_s, (r1, r2), chance_prob = self.game.step(s, a1_sampled, a2_sampled)
 
-        # Utility for updating player
-        u = (r1 if p == 1 else r2) + self.game.gamma * v_next
+        # Calculate discounted reward for this node
+        curr_u = self.game.gamma * (r1 if p == 1 else r2)
 
-        # Update player
+        # Recurse to get the future trajectory payoff and prob's
+        fut_u, fut_pi_p1, fut_pi_p2, fut_pi_chance = self.traverse(next_s, p,
+            past_u + curr_u, past_pi_p1 * a1_sampled_prob, past_pi_p2 * a2_sampled_prob, past_pi_chance * chance_prob
+        )
+
+        # Get prob's needed for cf
+        total_pi_p1 = past_pi_p1 * a1_sampled_prob * fut_pi_p1
+        total_pi_p2 = past_pi_p2 * a2_sampled_prob * fut_pi_p2
+        total_pi_chance = past_pi_chance * chance_prob * fut_pi_chance
+        pi_total = total_pi_p1 * total_pi_p2 * total_pi_chance
+        pi_total_opp_chance = (total_pi_p2 if p == 1 else total_pi_p1) * total_pi_chance
+
+        # Get total utility
+        total_u = past_u + curr_u + fut_u
+
+        # Update regret for each action in infoset and strategy for infoset
         if p == 1:
-            self.update_player(i1, a1, a1_sampled, sigma_1, u, reach_prob)
+            self.update_player(infoset_1, actions_1, a1_sampled, sigma_1, total_u, pi_total, pi_total_opp_chance, fut_pi_p1, past_pi_p1)
         else:
-            self.update_player(i2, a2, a2_sampled, sigma_2, u, reach_prob)
+            self.update_player(infoset_2, actions_2, a2_sampled, sigma_2, total_u, pi_total, pi_total_opp_chance, fut_pi_p2, past_pi_p2)
 
-        return u
+        # Return curr + future payoff and prob's
+        return curr_u + fut_u, a1_sampled_prob * fut_pi_p1, a2_sampled_prob * fut_pi_p2, chance_prob * fut_pi_chance
 
 def print_strategy(trainer):
     # Separate player strategies
@@ -121,7 +165,7 @@ def print_strategy(trainer):
 if __name__ == '__main__':
     # Reduced depth for debugging
     p1, p2 = (1, 2), (1, 2)
-    game = StochasticGame(p1, p2, depth=3)
+    game = StochasticGame(p1, p2, depth=3, t=None, transition=None)
     
     # Run MCCFR
     mccfr = MonteCarloCFR(game)
