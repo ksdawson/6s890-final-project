@@ -5,7 +5,7 @@ import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from mccfr import MonteCarloCFR
 import numpy as np
-from utils import state_space_size
+from utils import state_space_size, time_func
 from game import StochasticGame
 from transition_func import load_demand, load_graph, load_zones, Transition
 
@@ -236,8 +236,9 @@ class DeepCFR:
 
 if __name__ == '__main__':
     # Reduced depth for debugging
-    p1, p2 = (1, 5), (1, 5)
-    depth = 3
+    p1, p2 = (10, 5), (10, 5)
+    t = 60 * 60 # 60 mins
+    depth = (24 * 60 * 60) // t # 60 min steps -> 24 layers
 
     # Setup transition info
     zones = load_zones('../data/zones/example_zones/example_network/node_zone_info.csv')
@@ -246,7 +247,7 @@ if __name__ == '__main__':
     transition = Transition(p1, p2, graph, zones, demands)
 
     # Create game
-    game = StochasticGame(p1, p2, depth, 600, transition=transition)
+    game = StochasticGame(p1, p2, depth, t, transition=transition)
     
     deepcfr = DeepCFR(game)
-    deepcfr.train(5, 100)
+    time_func(deepcfr.train, {'iters': 5, 'traversals_per_iter': 100})

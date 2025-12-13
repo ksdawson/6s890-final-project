@@ -1,4 +1,11 @@
 import math
+import time
+
+def time_func(func, args):
+    start = time.time()
+    func(**args)
+    end = time.time()
+    print(f'Ran in {round(end-start)} s')
 
 def state_space_size(p, q):
     # Number of ways to assign 0 ... p items to q buckets
