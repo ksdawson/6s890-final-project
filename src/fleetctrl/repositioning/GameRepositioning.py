@@ -9,23 +9,52 @@ from cfr.game import GameState, StochasticGame
 from cfr.deep_cfr import PolicyNetwork, load_policy, infoset_to_tensor
 from cfr.utils import max_actions
 
+# Competitor models
+from src.fleetctrl.repositioning.AlonsoMoraRepositioning import AlonsoMoraRepositioning
+from src.fleetctrl.repositioning.FrontiersDensityBasedRepositioning import DensityRepositioning
+from src.fleetctrl.repositioning.FullSamplingRidePoolingRebalancingMultiStage import FullSamplingRidePoolingRebalancingMultiStage
+from src.fleetctrl.repositioning.FullSamplingRidePoolingRebalancingMultiStageReservation import FullSamplingRidePoolingRebalancingMultiStageReservation
+from src.fleetctrl.repositioning.LinearHailingRebalancing import LinearHailingRebalancing
+from src.fleetctrl.repositioning.PavoneContinuous import PavoneContinuous
+from src.fleetctrl.repositioning.PavoneHailingFC import PavoneHailingRepositioningFC
+
 # Model info
 BASE_DIR = Path(__file__).resolve().parents[3]
-NUM_TIME_STEPS = (24 * 60 * 60) / (10 * 60) # 10 mins
-NUM_SIM_STEPS = (24 * 60 * 60) / 30 # 30 seconds
+NUM_TIME_STEPS = (24 * 60 * 60) // (10 * 60) # 10 mins
+NUM_SIM_STEPS = (24 * 60 * 60) // 30 # 30 seconds
 # Example network
-# MODEL_PATH = BASE_DIR / 'cfr/example_network_policy_5c6z10m.pth'
-# MODEL_IN_SIZE = 5 + (NUM_TIME_STEPS * 5 * 2) # 5 zones
-# MODEL_OUT_SIZE = max_actions(5, 6) # 5 cars
+MODEL_PATH = BASE_DIR / 'cfr/example_network_policy_5c6z10m.pth'
+MODEL_IN_SIZE = 6 + (NUM_TIME_STEPS * 6 * 2) # 6 zones
+MODEL_OUT_SIZE = max_actions(5, 6) # 5 cars
 # NYC network
-MODEL_PATH = BASE_DIR / 'cfr/manhattan_network_policy_5c8z10m.pth'
-MODEL_IN_SIZE = 8 + (NUM_TIME_STEPS * 8 * 2) # 8 zones
-MODEL_OUT_SIZE = max_actions(5, 8) # 5 cars
+# MODEL_PATH = BASE_DIR / 'cfr/manhattan_network_policy_5c8z10m.pth'
+# MODEL_IN_SIZE = 8 + (NUM_TIME_STEPS * 8 * 2) # 8 zones
+# MODEL_OUT_SIZE = max_actions(5, 8) # 5 cars
+
+# Competitor model
+COMPETITOR_OPTIONS = [
+    ('AlonsoMoraRepositioning', AlonsoMoraRepositioning),
+    ('FrontiersDensityBasedRepositioning', DensityRepositioning),
+    ('FullSamplingRidePoolingRebalancingMultiStage', FullSamplingRidePoolingRebalancingMultiStage),
+    ('FullSamplingRidePoolingRebalancingMultiStageReservation', FullSamplingRidePoolingRebalancingMultiStageReservation),
+    ('LinearHailingRebalancing', LinearHailingRebalancing),
+    ('PavoneContinuous', PavoneContinuous),
+    ('PavoneHailingFC', PavoneHailingRepositioningFC),
+    ('GameRepositioning', None)
+]
+COMPETITOR = COMPETITOR_OPTIONS[0]
 
 class GameRepositioning(RepositioningBase):
     def __init__(self, fleetctrl, operator_attributes, dir_names):
         # Setup base class
         super().__init__(fleetctrl, operator_attributes, dir_names)
+        
+        # Choose competitor model
+        if fleetctrl.op_id == 1 and COMPETITOR[0] != 'GameRepositioning':
+            # Second player uses a non-game model
+            self.player = fleetctrl.op_id
+            self.competitor = COMPETITOR[1](fleetctrl, operator_attributes, dir_names)
+            return
         
         # Get sim info
         self.player = self.fleetctrl.op_id
@@ -177,6 +206,10 @@ class GameRepositioning(RepositioningBase):
         return list_veh_with_changes
 
     def determine_and_create_repositioning_plans(self, sim_time, lock=None):
+        # Pass off to competitor
+        if self.player == 1 and COMPETITOR[0] != 'GameRepositioning':
+            return self.competitor.determine_and_create_repositioning_plans(sim_time, lock)
+
         # Setup
         self.zone_system.time_trigger(sim_time)
         self.sim_time = sim_time
