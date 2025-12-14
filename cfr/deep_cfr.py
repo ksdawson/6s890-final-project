@@ -118,6 +118,8 @@ class DeepCFR:
     def train(self, iters, traversals_per_iter=1000, batch_size=1024):
         print(f'Starting deep CFR training with {iters} train runs of {traversals_per_iter} hands...')
         for i in range(iters):
+            print(f'Starting train run {i}...')
+
             # Collect data
             self.mccfr.train(traversals_per_iter)
             regret_data = self.mccfr.regret_buffer
@@ -196,6 +198,8 @@ class DeepCFR:
                 optimizer.step()
                 
                 total_loss += loss.item()
+            
+            print(f'Total loss on epoch {epoch}: {total_loss}')
 
 def train_example_network():
     p1, p2 = (5, 6), (5, 6)

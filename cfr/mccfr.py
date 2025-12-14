@@ -31,6 +31,10 @@ class ReservoirBuffer:
 
     def __len__(self):
         return len(self.data)
+    
+    def __iter__(self):
+        for infoset, target_vec in self.data:
+            yield infoset, target_vec
 
 class MonteCarloCFR:
     def __init__(self, game, deep_cfr=False, model=None, buffer_size=10000):
