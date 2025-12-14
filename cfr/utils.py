@@ -1,5 +1,6 @@
 import math
 import time
+from game import StochasticGame
 
 def time_func(func, args):
     start = time.time()
@@ -32,9 +33,16 @@ def get_infoset_count(p, q, depth):
 
 if __name__ == '__main__':   
     p, q = 10, 5
-    d = 1
+    d = 24
     count = get_infoset_count(p, q, d)
+    # states = StochasticGame.generate_states(p, q)
+    # num_actions = 0
+    # for state in states:
+    #     actions = StochasticGame.get_actions_for(state)
+    #     num_actions = max(num_actions, len(actions))
+    # num_states = len(states)
 
     print(f"Game Params: P={p}, Q={q}, Depth={d}")
     print(f"State Space Size (K): {state_space_size(p, q)}")
+    # print(f'Num states, actions: {num_states}, {num_actions}')
     print(f"Total Infosets: {count:,}")

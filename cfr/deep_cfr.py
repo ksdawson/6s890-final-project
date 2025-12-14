@@ -10,22 +10,16 @@ from game import StochasticGame
 from transition import load_demand, load_graph, load_zones, Transition
 
 class RegretNetwork(nn.Module):
-    def __init__(self, num_actions, num_input_slots, num_embeddings, embedding_dim=16, hidden_size=256):
+    def __init__(self, in_size, out_size, hidden_size=256):
         super().__init__()
-        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
-        self.flat_input_size = num_input_slots * embedding_dim
-        
-        self.fc1 = nn.Linear(self.flat_input_size, hidden_size)
+        self.fc1 = nn.Linear(in_size, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
         self.fc4 = nn.Linear(hidden_size, hidden_size)
         self.fc5 = nn.Linear(hidden_size, hidden_size)
-        self.fc6 = nn.Linear(hidden_size, num_actions)
+        self.fc6 = nn.Linear(hidden_size, out_size)
         
     def forward(self, x):
-        x = self.embedding(x)
-        x = x.view(x.size(0), -1)
-
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
@@ -34,22 +28,16 @@ class RegretNetwork(nn.Module):
         return self.fc6(x)
 
 class PolicyNetwork(nn.Module):
-    def __init__(self, num_actions, num_input_slots, num_embeddings, embedding_dim=16, hidden_size=256):
+    def __init__(self, in_size, out_size, hidden_size=256):
         super().__init__()
-        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
-        self.flat_input_size = num_input_slots * embedding_dim
-
-        self.fc1 = nn.Linear(self.flat_input_size, hidden_size)
+        self.fc1 = nn.Linear(in_size, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
         self.fc4 = nn.Linear(hidden_size, hidden_size)
         self.fc5 = nn.Linear(hidden_size, hidden_size)
-        self.fc6 = nn.Linear(hidden_size, num_actions)
+        self.fc6 = nn.Linear(hidden_size, out_size)
         
     def forward(self, x):
-        x = self.embedding(x)
-        x = x.view(x.size(0), -1)
-
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
@@ -57,57 +45,23 @@ class PolicyNetwork(nn.Module):
         x = F.relu(self.fc5(x))
         return self.fc6(x)
 
-def flatten(item):
-    if isinstance(item, (tuple, list)):
-        flat_list = []
-        for x in item:
-            flat_list.extend(flatten(x))
-        return flat_list
-    else:
-        return [item]
+def flatten(x):
+    for i in x:
+        if isinstance(i, (tuple, list)):
+            yield from flatten(i)
+        else:
+            yield i
 
-def infoset_to_tensor(infoset, num_states, max_history_length, state_len, num_players=2, device='cpu'):
-    player, player_s, player_history = infoset
-    
-    # Flatten inputs
-    flat_player_s = flatten(player_s)
-    flat_history = [flatten(h) for h in player_history]
-
-    # Calculate number of slots
-    total_slots = 1 + state_len + (max_history_length * state_len)
-    
-    # Create indices array
-    indices = np.zeros(total_slots, dtype=np.int64)
-    current_idx = 0
-    
-    # We define the maximum allowed index
-    # (Must match num_embeddings in the network initialization)
-    MAX_VALID_INDEX = num_states 
-    
-    # Encode player
-    indices[current_idx] = max(0, min(player - 1, MAX_VALID_INDEX)) 
-    current_idx += 1
-    
-    # Encode local state
-    for i, val in enumerate(flat_player_s):
-        if i >= state_len: break
-        if isinstance(val, int):
-            safe_val = max(0, min(val, MAX_VALID_INDEX))
-            indices[current_idx + i] = safe_val
-    current_idx += state_len
-    
-    # Encode history
-    for t, state_list in enumerate(flat_history):
-        if t >= max_history_length: break
-        
-        time_offset = t * state_len
-        for i, val in enumerate(state_list):
-            if i >= state_len: break
-            if isinstance(val, int):
-                safe_val = max(0, min(val, MAX_VALID_INDEX))
-                indices[current_idx + time_offset + i] = safe_val
-
-    tensor = torch.tensor(indices, dtype=torch.long).unsqueeze(0)
+def infoset_to_tensor(infoset, max_infoset_size, device='cpu'):
+    # TODO: Consider truncation or seperator?
+    # Discard player
+    p, s, h = infoset
+    # Flatten and concatenate everything
+    arr = np.fromiter(flatten((s, h)), dtype=int)
+    # Pad to full length w/ -1 as 0 is significant
+    padded = np.pad(arr, (0, max(0, max_infoset_size - len(arr))), constant_values=-1)
+    # Convert to a tensor
+    tensor = torch.tensor(padded, dtype=torch.float32).unsqueeze(0)
     return tensor.to(device)
 
 class DeepCFR:
@@ -115,31 +69,18 @@ class DeepCFR:
         # Get game info
         self.game = game
         self.num_states = max(state_space_size(*game.p1), state_space_size(*game.p2))
-        self.state_len = max(self.game.p1[1], self.game.p2[1]) + 1
-        self.input_size = 2 + self.num_states * self.state_len + (self.game.max_depth * self.num_states * self.state_len)
+        self.num_actions = self.num_states // 2
+        self.state_len = max(self.game.p1[1], self.game.p2[1])
 
         # Initialize the solver
         self.mccfr = MonteCarloCFR(game, deep_cfr=True, model=self.model)
 
+        # Setup networks 
+        self.max_in_size = self.state_len + (self.game.max_depth * self.state_len * 2) # could add +1 for player
         # Value Network predicts advantages/regrets (Unbounded)
-        self.num_slots = 1 + self.state_len + (self.game.max_depth * self.state_len)
-        # Pick an embedding dimension (Tune this! 8 to 64 is usually good)
-        EMBED_DIM = 16 
-        # Pass the total distinct values (num_states) so the embedding layer knows how big the dictionary is
-        self.value_net = RegretNetwork(
-            num_actions=self.num_states, 
-            num_input_slots=self.num_slots, 
-            num_embeddings=self.num_states + 1, # +1 for safety/padding
-            embedding_dim=EMBED_DIM
-        )
-
+        self.value_net = RegretNetwork(in_size=self.max_in_size, out_size=self.num_actions)
         # Policy Network predicts the average strategy (Probability distribution)
-        self.policy_net = PolicyNetwork(
-            self.num_states,
-            self.num_slots,
-            num_embeddings=self.num_states + 1,
-            embedding_dim=EMBED_DIM
-        )
+        self.policy_net = PolicyNetwork(in_size=self.max_in_size, out_size=self.num_actions)
         
         # Define Optimizers
         self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=0.001)
@@ -154,31 +95,24 @@ class DeepCFR:
         self.policy_net.to(self.device)
 
     def model(self, infoset):
-        infoset_tensor = infoset_to_tensor(infoset, self.num_states, self.game.max_depth, self.state_len, device=self.device)
+        infoset_tensor = infoset_to_tensor(infoset, self.max_in_size, device=self.device)
         output = self.value_net(infoset_tensor)
         return output.detach().cpu().numpy()[0]
 
     def train(self, iters, traversals_per_iter=1000, batch_size=1024):
         for i in range(iters):
             # Collect data
-            self.mccfr.train(traversals_per_iter) 
-
-            # Get data
+            self.mccfr.train(traversals_per_iter)
             regret_data = self.mccfr.regret_samples
             policy_data = self.mccfr.policy_samples
 
-            # Train regret network
+            # Train networks
             self.train_network(
                 self.value_net, 
                 self.value_optimizer, 
                 regret_data, 
                 batch_size
             )
-            
-            # Clear regret samples to prevent mixing old (bad) data with new data
-            self.mccfr.regret_samples = []
-
-            # Train policy network
             self.train_network(
                 self.policy_net, 
                 self.policy_optimizer, 
@@ -186,7 +120,10 @@ class DeepCFR:
                 batch_size,
                 is_policy=True
             )
-            
+
+            # Clear regret samples to prevent mixing old (bad) data with new data
+            self.mccfr.regret_samples = []
+
             # Optional: Clear policy samples if memory is an issue
             MAX_POLICY_SAMPLES = 20000
             if len(self.mccfr.policy_samples) > MAX_POLICY_SAMPLES:
@@ -197,52 +134,28 @@ class DeepCFR:
     def train_network(self, model, optimizer, data, batch_size, is_policy=False):
         if not data:
             return
+        
+        # Convert infosets to feature tensors
+        inputs, targets = zip(*data)
+        input_tensors = tuple(infoset_to_tensor(infoset, self.max_in_size, device=self.device) for infoset in inputs)
+        inputs = torch.cat(input_tensors)
 
-        # Unzip the raw data
-        raw_inputs, raw_targets = zip(*data)
-
-        # Convert faw infosets to feature tensors
-        processed_inputs = []
-        for raw_info in raw_inputs:
-            tensor = infoset_to_tensor(
-                raw_info, 
-                self.num_states, 
-                self.game.max_depth, 
-                self.state_len, 
-                device='cpu'
+        # Pad targets to full
+        targets = np.stack([
+            np.pad(
+                np.asarray(t, dtype=np.float32),
+                (0, self.num_actions - len(t)),
+                constant_values=0.0
             )
-            processed_inputs.append(tensor)
+            for t in targets
+        ])
+        targets = torch.tensor(targets, dtype=torch.float32, device=self.device)
         
-        # Stack inputs: Shape [Batch_Size, Input_Size]
-        inputs = torch.cat(processed_inputs).to(self.device)
-
-        # Process Targets: PAD to fixed length
-        # The network always outputs 'self.num_states' values. 
-        # We must make sure our target matches that shape.
-        padded_targets = []
-        for target in raw_targets:
-            # target is a list like [10.5, -2.0]
-            current_len = len(target)
-            
-            # Calculate how many zeros we need
-            pad_len = self.num_states - current_len
-            
-            if pad_len > 0:
-                # Add zeros to the end
-                padded_target = list(target) + [0.0] * pad_len
-            else:
-                # Truncate if somehow larger (safety check)
-                padded_target = target[:self.num_states]
-                
-            padded_targets.append(padded_target)
-
-        # Now all rows are the same length -> Safe to convert
-        targets = torch.tensor(np.array(padded_targets), dtype=torch.float32).to(self.device)
-        
-        # Create DataLoader & Train
+        # Create dataLoader
         dataset = TensorDataset(inputs, targets)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
+        # Train
         model.train()
         epochs = 2 
         for epoch in range(epochs):
@@ -266,18 +179,16 @@ class DeepCFR:
                 total_loss += loss.item()
         
     def save_policy(self, path='policy.pth'):
-        '''Saves the policy network weights to a file.'''
         # It is good practice to save the state_dict rather than the entire object
         torch.save(self.policy_net.state_dict(), path)
         print(f'Policy network saved to {path}')
 
     def load_policy(self, path='policy.pth'):
-        '''Loads weights from a file into the policy network.'''
         # map_location ensures we can load a GPU model onto a CPU if needed
         checkpoint = torch.load(path, map_location=self.device)
         self.policy_net.load_state_dict(checkpoint)
         
-        # Set to eval mode (important for inference/playing)
+        # Set to eval mode (important for inference)
         self.policy_net.eval() 
         print(f'Policy network loaded from {path}')
 
