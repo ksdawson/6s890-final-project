@@ -281,30 +281,30 @@ if __name__ == "__main__":
 
         # example, alonso mora
 
-        log_level = "info"
-        cc = os.path.join(scs_path, "constant_config_ir_repo_example_OURS.csv")
-        sc = os.path.join(scs_path, "example_repositioning_alonso_mora_OURS.csv")
-        run_scenarios(cc, sc, log_level=log_level, n_cpu_per_sim=1, n_parallel_sim=1)
-        list_results = read_outputs_for_comparison(cc, sc)
-        all_scenario_assert_dict = {0: {"number users": 198}}
-        check_assertions(list_results, all_scenario_assert_dict)
+        # log_level = "info"
+        # cc = os.path.join(scs_path, "constant_config_ir_repo_example_OURS.csv")
+        # sc = os.path.join(scs_path, "example_repositioning_alonso_mora_OURS.csv")
+        # run_scenarios(cc, sc, log_level=log_level, n_cpu_per_sim=1, n_parallel_sim=1)
+        # list_results = read_outputs_for_comparison(cc, sc)
+        # all_scenario_assert_dict = {0: {"number users": 198}}
+        # check_assertions(list_results, all_scenario_assert_dict)
         
 
         # new york, alonso mora
 
-        log_level = "info"
-        cc = os.path.join(scs_path, "constant_config_ir_repo_nyc_OURS.csv")
-        sc = os.path.join(scs_path, "nyc_repositioning_alonso_mora_OURS.csv")
-        run_scenarios(cc, sc, log_level=log_level, n_cpu_per_sim=1, n_parallel_sim=1)
-        list_results = read_outputs_for_comparison(cc, sc)
-        all_scenario_assert_dict = {0: {"number users": 198}}
-        check_assertions(list_results, all_scenario_assert_dict)
+        # log_level = "info"
+        # cc = os.path.join(scs_path, "constant_config_ir_repo_nyc_OURS.csv")
+        # sc = os.path.join(scs_path, "nyc_repositioning_alonso_mora_OURS.csv")
+        # run_scenarios(cc, sc, log_level=log_level, n_cpu_per_sim=1, n_parallel_sim=1)
+        # list_results = read_outputs_for_comparison(cc, sc)
+        # all_scenario_assert_dict = {0: {"number users": 198}}
+        # check_assertions(list_results, all_scenario_assert_dict)
         
         # example, GameRepositioning
 
         log_level = "info"
         cc = os.path.join(scs_path, "constant_config_ir_repo_example_OURS.csv")
-        sc = os.path.join(scs_path, "example_repositioning_alonso_mora_OURS.csv")
+        sc = os.path.join(scs_path, "example_repositioning_game_OURS.csv")
         run_scenarios(cc, sc, log_level=log_level, n_cpu_per_sim=1, n_parallel_sim=1)
         list_results = read_outputs_for_comparison(cc, sc)
         all_scenario_assert_dict = {0: {"number users": 198}}
@@ -315,7 +315,7 @@ if __name__ == "__main__":
 
         log_level = "info"
         cc = os.path.join(scs_path, "constant_config_ir_repo_nyc_OURS.csv")
-        sc = os.path.join(scs_path, "nyc_repositioning_alonso_mora_OURS.csv")
+        sc = os.path.join(scs_path, "nyc_repositioning_game_OURS.csv")
         run_scenarios(cc, sc, log_level=log_level, n_cpu_per_sim=1, n_parallel_sim=1)
         list_results = read_outputs_for_comparison(cc, sc)
         all_scenario_assert_dict = {0: {"number users": 198}}
