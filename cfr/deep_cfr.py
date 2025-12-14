@@ -107,17 +107,21 @@ class DeepCFR:
         self.value_net.to(self.device)
         self.policy_net.to(self.device)
 
-    def model(self, infoset):
+    def model(self, infoset, model_type):
         infoset_tensor = infoset_to_tensor(infoset, self.max_in_size, device=self.device)
-        output = self.value_net(infoset_tensor)
+        if model_type == 'regret':
+            output = self.value_net(infoset_tensor)
+        else:
+            output = self.policy_net(infoset_tensor)
         return output.detach().cpu().numpy()[0]
 
     def train(self, iters, traversals_per_iter=1000, batch_size=1024):
+        print(f'Starting deep CFR training with {iters} train runs of {traversals_per_iter} hands...')
         for i in range(iters):
             # Collect data
             self.mccfr.train(traversals_per_iter)
-            regret_data = self.mccfr.regret_samples
-            policy_data = self.mccfr.policy_samples
+            regret_data = self.mccfr.regret_buffer
+            policy_data = self.mccfr.policy_buffer
 
             # Train networks
             self.train_network(
@@ -135,14 +139,16 @@ class DeepCFR:
             )
 
             # Clear regret samples to prevent mixing old (bad) data with new data
-            self.mccfr.regret_samples = []
+            self.mccfr.regret_buffer = []
 
             # Optional: Clear policy samples if memory is an issue
             MAX_POLICY_SAMPLES = 20000
-            if len(self.mccfr.policy_samples) > MAX_POLICY_SAMPLES:
+            if len(policy_data) > MAX_POLICY_SAMPLES:
                 # Randomly sample to keep size manageable
-                indices = np.random.choice(len(self.mccfr.policy_samples), MAX_POLICY_SAMPLES, replace=False)
-                self.mccfr.policy_samples = [self.mccfr.policy_samples[i] for i in indices]
+                indices = np.random.choice(len(policy_data), MAX_POLICY_SAMPLES, replace=False)
+                self.mccfr.policy_buffer = [policy_data[i] for i in indices]
+
+            print(f'Progress: {round((i+1)/iters * 100, 2)}% done')
 
     def train_network(self, model, optimizer, data, batch_size, is_policy=False):
         if not data:
@@ -245,7 +251,7 @@ def train_nyc_network():
 
 if __name__ == '__main__':
     # Example network
-    # train_example_network()
+    train_example_network()
 
     # NYC network
-    train_nyc_network()
+    # train_nyc_network()

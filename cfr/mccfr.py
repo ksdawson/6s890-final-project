@@ -2,8 +2,38 @@ import random
 from cfr.game import StochasticGame
 from cfr.transition import load_demand, load_graph, load_zones, Transition
 
+class ReservoirBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.data = []
+        self.total_seen = 0 # Counts how many items we've ever tried to add
+
+    def add(self, item):
+        """
+        Adds an item to the buffer.
+        If buffer is not full, append.
+        If full, replace a random existing item with probability (capacity / total_seen).
+        """
+        if len(self.data) < self.capacity:
+            self.data.append(item)
+        else:
+            # Randomly decide whether to keep the new item
+            # The chance of keeping it is capacity / (total_seen + 1)
+            j = random.randint(0, self.total_seen)
+            if j < self.capacity:
+                self.data[j] = item
+        
+        self.total_seen += 1
+
+    def sample(self, batch_size):
+        """Return a random batch from the buffer."""
+        return random.sample(self.data, min(batch_size, len(self.data)))
+
+    def __len__(self):
+        return len(self.data)
+
 class MonteCarloCFR:
-    def __init__(self, game, deep_cfr=False, model=None):
+    def __init__(self, game, deep_cfr=False, model=None, buffer_size=10000):
         self.game = game
         self.regret_sum = {} # R[I][a]
         self.strategy_sum = {} # s[I][a]
@@ -12,8 +42,8 @@ class MonteCarloCFR:
         # Deep CFR handling
         if deep_cfr:
             # Buffers to store data for NN training
-            self.regret_samples = [] # RS[I]
-            self.policy_samples = [] # PS[I]
+            self.regret_buffer = ReservoirBuffer(buffer_size)
+            self.policy_buffer = ReservoirBuffer(buffer_size)
             self.model = model
         self.deep_cfr = deep_cfr
 
@@ -31,7 +61,8 @@ class MonteCarloCFR:
             self.traverse(self.game.initial_state(), p=1, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
             self.traverse(self.game.initial_state(), p=2, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
         # Compute the average strategy for each info set
-        self.average_strategy()
+        if not self.deep_cfr:
+            self.average_strategy()
 
     def update_infosets(self, s, p):
         # Get infoset, action for player
@@ -80,30 +111,33 @@ class MonteCarloCFR:
     def update_player(self, infoset, actions, a_sampled, sigma, u,
         pi_total, pi_total_opp_chance, pi_future_player, pi_past_player
     ):
+        if self.deep_cfr:
+            # Add samples for training
+            regret_vec, strategy_vec = [], []
         for a in actions:
-            # Get counterfactual regret
+            # Get counterfactual regret, strategy
             cf_regret = self.counterfactual_regret(a, a_sampled, sigma, u,
                 pi_total, pi_total_opp_chance, pi_future_player
             )
-            # Update regret
-            self.regret_sum[infoset][a] += cf_regret
-            # Update strategy
-            self.strategy_sum[infoset][a] += (pi_past_player * sigma[a]) / pi_total
-
-            # Handle Deep CFR
+            cf_strat = (pi_past_player * sigma[a]) / pi_total
             if self.deep_cfr:
-                # Add samples for training
-                regret_vec = [self.regret_sum[infoset][a] for a in actions]
-                self.regret_samples.append((infoset, regret_vec))
-                strategy_vec = [self.strategy_sum[infoset][a] for a in actions]
-                self.policy_samples.append((infoset, strategy_vec))
+                # Update samples
+                regret_vec.append(cf_regret)
+                strategy_vec.append(cf_strat)
+            else:
+                # Update tabular sums
+                self.regret_sum[infoset][a] += cf_regret
+                self.strategy_sum[infoset][a] += cf_strat
+        if self.deep_cfr:
+            self.regret_buffer.add((infoset, regret_vec))
+            self.policy_buffer.add((infoset, strategy_vec))
 
     def sample_action(self, actions, sigma):
         return random.choices(actions, weights=[sigma[a] for a in actions], k=1)[0]
     
     def get_regrets(self, infoset, actions):
         if self.deep_cfr:
-            regret_vector = self.model(infoset)
+            regret_vector = self.model(infoset, model_type='regret')
             regrets = {a: r for a, r in zip(actions, regret_vector)}
             return regrets
         else:
@@ -117,12 +151,20 @@ class MonteCarloCFR:
             return 0, 1.0, 1.0, 1.0 # future
         
         # Update CFR state for unseen info sets
-        infoset_1, actions_1 = self.update_infosets(s, 1)
-        infoset_2, actions_2 = self.update_infosets(s, 2)
+        if self.deep_cfr:
+            infoset_1, actions_1 = s.infoset_key(1), self.game.actions(s)[0]
+            infoset_2, actions_2 = s.infoset_key(2), self.game.actions(s)[1]
+        else:
+            infoset_1, actions_1 = self.update_infosets(s, 1)
+            infoset_2, actions_2 = self.update_infosets(s, 2)
+
+        # Get current regrets for the infoset
+        regrets_1 = self.get_regrets(infoset_1, actions_1)
+        regrets_2 = self.get_regrets(infoset_2, actions_2)
 
         # Get strategies for both players
-        sigma_1 = self.regret_matching(self.get_regrets(infoset_1, actions_1))
-        sigma_2 = self.regret_matching(self.get_regrets(infoset_2, actions_2))
+        sigma_1 = self.regret_matching(regrets_1)
+        sigma_2 = self.regret_matching(regrets_2)
 
         # Sample actions from strategies
         a1_sampled = self.sample_action(actions_1, sigma_1)
@@ -149,6 +191,9 @@ class MonteCarloCFR:
         total_pi_chance = past_pi_chance * chance_prob * fut_pi_chance
         pi_total = total_pi_p1 * total_pi_p2 * total_pi_chance
         pi_total_opp_chance = (total_pi_p2 if p == 1 else total_pi_p1) * total_pi_chance
+        # Make sure pi_total doesn't cause div by 0
+        if pi_total <= 1e-12:
+            pi_total = 1e-12
 
         # Get total utility
         total_u = past_u + curr_u + self.game.gamma * fut_u
