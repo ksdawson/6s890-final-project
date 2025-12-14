@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from cfr.mccfr import MonteCarloCFR
 import numpy as np
@@ -125,17 +126,21 @@ class DeepCFR:
             regret_data = self.mccfr.regret_buffer
             policy_data = self.mccfr.policy_buffer
 
+            # Separate into train and test sets to see if (1) it's learning (2) it generalizes
+            regret_train_data, regret_val_data = train_test_split(regret_data.data, test_size=0.2, shuffle=True)
+            policy_train_data, policy_val_data = train_test_split(policy_data.data, test_size=0.2, shuffle=True)
+
             # Train networks
             self.train_network(
                 self.value_net, 
                 self.value_optimizer, 
-                regret_data, 
+                regret_train_data, regret_val_data,
                 batch_size
             )
             self.train_network(
                 self.policy_net, 
                 self.policy_optimizer, 
-                policy_data, 
+                policy_train_data, policy_val_data,
                 batch_size,
                 is_policy=True
             )
@@ -145,10 +150,7 @@ class DeepCFR:
 
             print(f'Progress: {round((i+1)/iters * 100, 2)}% done')
 
-    def train_network(self, model, optimizer, data, batch_size, is_policy=False):
-        if not data:
-            return
-        
+    def prepare_dataset(self, data):
         # Convert infosets to feature tensors
         inputs, targets = zip(*data)
         input_tensors = tuple(infoset_to_tensor(infoset, self.max_in_size, device=self.device) for infoset in inputs)
@@ -164,9 +166,24 @@ class DeepCFR:
             for t in targets
         ])
         targets = torch.tensor(targets, dtype=torch.float32, device=self.device)
+
+        return inputs, targets
+
+    def train_network(self, model, optimizer, train_data, val_data, batch_size, is_policy=False):
+        if not train_data or not val_data:
+            return
+        mode_name = 'policy' if is_policy else 'regret'
+        print(f'Training {mode_name} network...')
+        
+        # Convert infosets to feature tensors
+        train_x, train_y = self.prepare_dataset(train_data)
+        if is_policy:
+            # Normalize targets so they sum to 1 (like Softmax)
+            # Add epsilon (1e-12) to prevent division by zero
+            train_y = train_y / (train_y.sum(dim=1, keepdim=True) + 1e-12)
         
         # Create dataLoader
-        dataset = TensorDataset(inputs, targets)
+        dataset = TensorDataset(train_x, train_y)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
         # Train
@@ -192,7 +209,26 @@ class DeepCFR:
                 
                 total_loss += loss.item()
             
-            print(f'Total loss on epoch {epoch}: {total_loss}')
+            print(f'Epoch {epoch} loss: {total_loss:.4f}')
+
+        # Test
+        model.eval() # Switch to evaluation mode (disables dropout/batchnorm updates)
+        with torch.no_grad(): # Disable gradient calculation (saves memory)
+            # Preprocess Validation Data
+            val_x, val_y = self.prepare_dataset(val_data)
+            
+            # Forward pass on full validation set
+            # (If val set is huge, wrap this in a DataLoader loop too)
+            val_outputs = model(val_x)
+            
+            if is_policy:
+                val_y = val_y / (val_y.sum(dim=1, keepdim=True) + 1e-12)
+                val_outputs = F.softmax(val_outputs, dim=1)
+            
+            val_loss = self.loss_fn(val_outputs, val_y).item()
+            print(f'>> Validation Loss ({mode_name}): {val_loss:.4f}')
+        
+        model.train() # Switch back to train mode for safety
 
 def train_example_network():
     p1, p2 = (5, 6), (5, 6)
@@ -201,7 +237,12 @@ def train_example_network():
 
     # Setup transition info
     zones = load_zones('./data/zones/example_zones/example_network/node_zone_info.csv')
-    demands = [load_demand('./data/demand/example_demand/matched/example_network/example_100.csv')]
+    demand_files = [
+        './data/demand/example_demand/matched/example_network/example_100.csv',
+        './data/demand/example_demand/matched/example_network/example_200.csv',
+        './data/demand/example_demand/matched/example_network/example_400.csv'
+    ]
+    demands = [load_demand(demand_file) for demand_file in demand_files]
     graph = load_graph('./data/networks/example_network/base/nodes.csv', './data/networks/example_network/base/edges.csv')
     transition = Transition(p1, p2, graph, zones, demands)
 
