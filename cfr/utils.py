@@ -1,6 +1,6 @@
 import math
 import time
-from game import StochasticGame
+from cfr.game import StochasticGame
 
 def time_func(func, args):
     start = time.time()

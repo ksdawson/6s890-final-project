@@ -1,5 +1,5 @@
 import random
-from transition import Transition, load_demand, load_zones, load_graph
+from cfr.transition import Transition, load_demand, load_zones, load_graph
 
 def get_combos(target, num_slots, current_combo=None):
     if current_combo is None:

@@ -1,120 +1,171 @@
+from pathlib import Path
+import torch
+import random
+import numpy as np
+from scipy.optimize import linear_sum_assignment
 from src.fleetctrl.repositioning.RepositioningBase import RepositioningBase
 from src.misc.globals import *
+from cfr.game import GameState, StochasticGame
+from cfr.deep_cfr import PolicyNetwork, load_policy, infoset_to_tensor
 
-class Player:
-    def __init__(self, pid, play, actions):
-        self.pid = pid
-        self.play = play
-        self.actions = actions
-        self.total_reward = 0.0
-
-    def action(self):
-        return self.actions[-1] # dummy action (everyone moves to last zone)
-
-    def payoff(self, reward, state=None):
-        self.total_reward += reward
-
-class Game:
-    def __init__(self, players, actions):
-        self.actions = actions
-        self.players = [Player(pid, play, actions) for pid, play in enumerate(players)]
-
-    def game_step(self, players, state=None):
-        # TODO: update internal game state?
-
-        # Give players payoff and get actions for all active players
-        actions = []
-        for pid, (active, payoff) in enumerate(players):
-            player = self.players[pid]
-            player.payoff(payoff)
-            actions.append(player.action())
-        
-        return actions
-    
-    def get_payoff(self, wait_time):
-        payoff = 1/wait_time # incentivize shorter wait time
-        payoff *= 100 # prevent small floating point issues
-        return payoff
+# Model info
+BASE_DIR = Path(__file__).resolve().parents[3]
+MODEL_PATH = BASE_DIR / 'cfr/example_network_policy_5c6z10m.pth'
+MODEL_IN_SIZE = 1734
+MODEL_OUT_SIZE = 252
+NUM_TIME_STEPS = 144
+NUM_SIM_STEPS = 2880
 
 class GameRepositioning(RepositioningBase):
     def __init__(self, fleetctrl, operator_attributes, dir_names):
         # Setup base class
         super().__init__(fleetctrl, operator_attributes, dir_names)
         
-        # Setup game
-        self.game = Game(self.fleetctrl.sim_vehicles, self.zone_system.get_all_zones())
+        # Get sim info
+        self.player = self.fleetctrl.op_id
+        self.vehs = [veh for veh in self.fleetctrl.sim_vehicles if veh.op_id == self.player]
+        self.zones = self.zone_system.get_all_zones()
+        self.step = 0
+        self.time_step_count = 0
+        
+        # No game state yet
+        self.game_state = None
+        self.action = None
 
-        # State
-        self.vehicle_state = ['idle'] * len(self.fleetctrl.sim_vehicles) # idle, repo, ride
+        # Model
+        self.policy_net = PolicyNetwork(in_size=MODEL_IN_SIZE, out_size=MODEL_OUT_SIZE)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        load_policy(self.policy_net, self.device, MODEL_PATH)
 
-    def is_vehicle_idle(self, vid):
-        return not self.fleetctrl.veh_plans[vid].list_plan_stops
-    
-    def is_vehicle_repositioning(self, vid):
-        veh_plan = self.fleetctrl.veh_plans[vid]
-        stops = veh_plan.list_plan_stops
-        last_stop = stops[-1]
-        return last_stop.get_state() == G_PLANSTOP_STATES.REPO_TARGET
-    
     def get_vehicle_zone_id(self, veh):
-        # Maybe useful for current state?
         zone_id = self.zone_system.get_zone_from_pos(veh.pos)
         return zone_id
     
-    def get_pickup_wait_time(self, vid):
-        # TODO: is this the correct way to do this?
-        for rid, req in self.fleetctrl.rq_dict.items():
-            # Check if req is assigned to vid
-            if req.get_reservation_flag() or req.service_vehicle != vid:
-                continue
-
-            # Get wait time by averaging estimated pickup time
-            start_time = req.get_rq_time()
-            _, end_time_lo, end_time_up = req.get_o_stop_info()
-            wait_time_lo, wait_time_up = end_time_lo - start_time, end_time_up - start_time
-            avg_wait_time = (wait_time_up + wait_time_lo) / 2
-            return avg_wait_time
+    def get_state(self):
+        # Get veh dist over zones (state vector)
+        state = [0] * (len(self.zones) - 1) # ignore -1 zone
+        for veh in self.vehs:
+            zone = self.get_vehicle_zone_id(veh)
+            state[zone-1] += 1
         
-    def get_vehicle(self, vid):
-        return self.fleetctrl.sim_vehicles[vid]
+        return state
+    
+    def update_state(self):
+        state = self.get_state()
+        
+        # Construct new state
+        next_history = (self.game_state.history + [((self.game_state.s1, self.action), None)]) if self.game_state is not None else None
+        next_s = GameState(state, s2=None, history=next_history) # other player doesn't matter for inference since it's based on infoset
 
-    def reposition_vehicle(self, vid, zone_id):
-        list_veh_obj_with_repos = self._od_to_veh_plan_assignment(self.sim_time, None, zone_id, [self.get_vehicle(vid)])
+        self.game_state = next_s
+
+    def reposition_vehicle(self, veh, zone_id):
+        list_veh_obj_with_repos = self._od_to_veh_plan_assignment(self.sim_time, None, zone_id, [veh])
         return [veh_obj.vid for veh_obj in list_veh_obj_with_repos]
 
+    def action_to_repo_plan(self):
+        '''
+        Converts a net-flow action plan (counts per zone) into specific vehicle assignments
+        minimizing total travel cost.
+        '''
+        # Get candidate vehicles (veh in zone w/ neg change)
+        src_zone_ids = {z_id for z_id, cnt in enumerate(self.action) if cnt < 0}
+        candidate_vehs = []
+        for vid, veh in enumerate(self.vehs):
+            if self.get_vehicle_zone_id(veh) in src_zone_ids:
+                candidate_vehs.append((vid, veh))
+
+        # Get dst targets
+        # We must 'expand' the destinations. If Zone 5 needs +3 vehicles,
+        # we create 3 separate column slots for Zone 5 in the matrix.
+        target_zones = []
+        for z_id, cnt in enumerate(self.action):
+            if cnt > 0:
+                target_zones.extend([z_id] * int(cnt))
+
+        # Edge case: If no supply or no demand, return empty plan
+        if not candidate_vehs or not target_zones:
+            return []
+
+        # Setup routing targets for optimization
+        # To save computation, we identify the unique centroids we need to route to.
+        unique_dst_zones = set(target_zones)
+        # Map zone_id -> (position_tuple). 
+        # We use random_centroid_node as the specific target within the zone.
+        zone_to_pos = {}
+        for z_id in unique_dst_zones:
+            node_id = self.zone_system.get_random_centroid_node(z_id)
+            zone_to_pos[z_id] = self.routing_engine.return_node_position(node_id)
+        
+        unique_dst_positions = list(zone_to_pos.values())
+
+        # Construct cost matrix
+        # Shape: (num_candidates, num_target_slots)
+        # We initialize with a high cost to represent infeasible links if needed.
+        cost_matrix = np.zeros((len(candidate_vehs), len(target_zones)))
+
+        for row_idx, (vid, veh) in enumerate(candidate_vehs):
+            # Get costs from this vehicle to ALL unique destination centroids at once
+            # returns list of tuples: (target_pos, cost, time, dist)
+            route_results = self.fleetctrl.routing_engine.return_travel_costs_1toX(
+                veh.pos, unique_dst_positions
+            )
+            
+            # Create a lookup for this specific vehicle's costs: {pos: travel_time}
+            # Note: Adjust index [2] if your routing engine returns time at a different index
+            costs_by_pos = {res[0]: res[2] for res in route_results}
+
+            # Fill the matrix row
+            for col_idx, target_z_id in enumerate(target_zones):
+                target_pos = zone_to_pos[target_z_id]
+                # Use a large default if unreachable, though normally reachable in connected graphs
+                cost_matrix[row_idx, col_idx] = costs_by_pos.get(target_pos, 1e9)
+
+        # Solve assignment
+        # efficient bipartite matching (Hungarian algorithm)
+        # If candidates > targets, it picks the best subset of vehicles.
+        # If candidates < targets, it assigns all vehicles to the best available slots.
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+        # Formulate plan
+        repo_plan = []
+        for r, c in zip(row_ind, col_ind):
+            cost = cost_matrix[r, c]
+            if cost >= 1e8: 
+                continue
+
+            # Get the actual vehicle object and the assigned zone ID
+            assigned_veh = candidate_vehs[r][1]
+            assigned_zone_id = target_zones[c]
+            
+            # Structure the plan
+            repo_plan.append((assigned_veh, assigned_zone_id))
+
+        return repo_plan
+
     def time_step(self):
-        # Get active players and payoffs
-        players = []
-        for vid, veh in enumerate(self.fleetctrl.sim_vehicles):
-            payoff = 0.0 # default when idling or completing a ride
-            if self.is_vehicle_idle(vid):
-                active = True
-                state = 'idle'
-            elif self.is_vehicle_repositioning(vid):
-                active = False
-                state = 'repo'
-            else:
-                # Completing ride
-                active = False
-                if self.vehicle_state[vid] != 'ride':
-                    # TODO: This may not be the best way to do this?
-                    wait_time = self.get_pickup_wait_time(vid)
-                    if wait_time is not None:
-                        # Assigned a ride so give payoff
-                        payoff = self.game.get_payoff(wait_time)
-                        state = 'ride'
-                    else:
-                        state = 'repo'
-            self.vehicle_state[vid] = state
-            players.append((active, payoff))
+        # Update state
+        self.update_state()
+        actions = StochasticGame.get_actions_for(self.game_state.s1)
 
-        # Get actions from game
-        actions = self.game.game_step(players)
+        # Run model to get strategy
+        infoset = self.game_state.infoset_key(1)
+        infoset_tensor = infoset_to_tensor(infoset, MODEL_IN_SIZE, device=self.device)
+        with torch.no_grad():
+            output = self.policy_net(infoset_tensor) # 1xN tensor
+            logits = output[0] # 1D tensor of size N
+            logits = logits[:len(actions)] # mask illegal actions
+            strategy = torch.softmax(logits, dim=0) # softmax over 1D vector
+        strategy = strategy.cpu().numpy()
 
-        # Use actions to set repositioning
+        # Sample an action from the strategy
+        self.action = random.choices(actions, weights=[strategy[i] for i, a in enumerate(actions)], k=1)[0]
+
+        # Apply action
+        repo_plan = self.action_to_repo_plan()
         list_veh_with_changes = []
-        for vid, zone_id in enumerate(actions):
-            list_veh_obj_with_repos = self.reposition_vehicle(vid, zone_id)
+        for veh, zone_id in repo_plan:
+            list_veh_obj_with_repos = self.reposition_vehicle(veh, zone_id)
             list_veh_with_changes.extend(list_veh_obj_with_repos)
 
         return list_veh_with_changes
@@ -126,7 +177,13 @@ class GameRepositioning(RepositioningBase):
         if lock is None:
             lock = self.lock_repo_assignments
 
-        # Handle repositioning
-        list_veh_with_changes = self.time_step()
+        # Repositioning logic
+        # list_veh_with_changes = []
+        # if self.step % (NUM_SIM_STEPS // NUM_TIME_STEPS) == 0 and self.time_step_count < NUM_TIME_STEPS:
+        #     # Only repo for num time steps we trained on
+        #     list_veh_with_changes = self.time_step()
+        #     self.time_step_count += 1
+        # self.step += 1
         
-        return list_veh_with_changes
+        # return list_veh_with_changes
+        return []

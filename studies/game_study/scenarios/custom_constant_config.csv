@@ -7,12 +7,12 @@ demand_name,example_demand
 zone_system_name,example_zones
 time_step,30
 start_time,0
-end_time,3600
+end_time,86400
 network_type,NetworkBasicWithStore
 op_max_wait_time,300
 op_max_detour_time_factor,1.4
 op_const_boarding_time,30
-nr_mod_operators,1
+nr_mod_operators,2
 op_vr_control_func_dict,func_key:distance_and_user_times_with_walk;vot:0.45
 n_cpu_per_sim,1
 log_level,info

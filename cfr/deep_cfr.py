@@ -3,11 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
-from mccfr import MonteCarloCFR
+from cfr.mccfr import MonteCarloCFR
 import numpy as np
-from utils import time_func, max_actions
-from game import StochasticGame
-from transition import load_demand, load_graph, load_zones, Transition
+from cfr.utils import time_func, max_actions
+from cfr.game import StochasticGame
+from cfr.transition import load_demand, load_graph, load_zones, Transition
 
 class RegretNetwork(nn.Module):
     def __init__(self, in_size, out_size, hidden_size=256):
@@ -63,6 +63,20 @@ def infoset_to_tensor(infoset, max_infoset_size, device='cpu'):
     # Convert to a tensor
     tensor = torch.tensor(padded, dtype=torch.float32).unsqueeze(0)
     return tensor.to(device)
+
+def save_policy(net, path='policy.pth'):
+    # It is good practice to save the state_dict rather than the entire object
+    torch.save(net.state_dict(), path)
+    print(f'Policy network saved to {path}')
+
+def load_policy(net, device, path='policy.pth'):
+    # map_location ensures we can load a GPU model onto a CPU if needed
+    checkpoint = torch.load(path, map_location=device)
+    net.load_state_dict(checkpoint)
+    
+    # Set to eval mode (important for inference)
+    net.eval() 
+    print(f'Policy network loaded from {path}')
 
 class DeepCFR:
     def __init__(self, game):
@@ -176,30 +190,16 @@ class DeepCFR:
                 optimizer.step()
                 
                 total_loss += loss.item()
-        
-    def save_policy(self, path='policy.pth'):
-        # It is good practice to save the state_dict rather than the entire object
-        torch.save(self.policy_net.state_dict(), path)
-        print(f'Policy network saved to {path}')
-
-    def load_policy(self, path='policy.pth'):
-        # map_location ensures we can load a GPU model onto a CPU if needed
-        checkpoint = torch.load(path, map_location=self.device)
-        self.policy_net.load_state_dict(checkpoint)
-        
-        # Set to eval mode (important for inference)
-        self.policy_net.eval() 
-        print(f'Policy network loaded from {path}')
 
 if __name__ == '__main__':
-    p1, p2 = (5, 5), (5, 5)
+    p1, p2 = (5, 6), (5, 6)
     t = 10 * 60 # 10 mins
     depth = (24 * 60 * 60) // t # 10 min steps -> 144 layers
 
     # Setup transition info
-    zones = load_zones('../data/zones/example_zones/example_network/node_zone_info.csv')
-    demands = [load_demand('../data/demand/example_demand/matched/example_network/example_100.csv')]
-    graph = load_graph('../data/networks/example_network/base/nodes.csv', '../data/networks/example_network/base/edges.csv')
+    zones = load_zones('./data/zones/example_zones/example_network/node_zone_info.csv')
+    demands = [load_demand('./data/demand/example_demand/matched/example_network/example_100.csv')]
+    graph = load_graph('./data/networks/example_network/base/nodes.csv', './data/networks/example_network/base/edges.csv')
     transition = Transition(p1, p2, graph, zones, demands)
 
     # Create game
@@ -209,4 +209,4 @@ if __name__ == '__main__':
     time_func(deepcfr.train, {'iters': 5, 'traversals_per_iter': 100})
 
     # Save the policy
-    deepcfr.save_policy('example_network_5c5z10m.pth')
+    save_policy(deepcfr.policy_net, './cfr/example_network_policy_5c6z10m.pth')

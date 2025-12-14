@@ -1,6 +1,6 @@
 import random
-from game import StochasticGame
-from transition import load_demand, load_graph, load_zones, Transition
+from cfr.game import StochasticGame
+from cfr.transition import load_demand, load_graph, load_zones, Transition
 
 class MonteCarloCFR:
     def __init__(self, game, deep_cfr=False, model=None):
