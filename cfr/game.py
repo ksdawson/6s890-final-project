@@ -64,7 +64,7 @@ class StochasticGame:
         t = len(s.history) + 1 # prevent div by 0 as first step should be 1
 
         # Call transition func
-        next_s1, next_s2, r1, r2, prob, assigns = self.transition.next_state((self.time_step, t), s, a1, a2)
+        next_s1, next_s2, r1, r2, prob, assigns = self.transition.next_state((t, self.time_step), s, a1, a2)
 
         # Construct next state
         next_history = s.history + [((s.s1, a1), (s.s2, a2))]

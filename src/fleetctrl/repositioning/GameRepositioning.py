@@ -7,14 +7,20 @@ from src.fleetctrl.repositioning.RepositioningBase import RepositioningBase
 from src.misc.globals import *
 from cfr.game import GameState, StochasticGame
 from cfr.deep_cfr import PolicyNetwork, load_policy, infoset_to_tensor
+from cfr.utils import max_actions
 
 # Model info
 BASE_DIR = Path(__file__).resolve().parents[3]
-MODEL_PATH = BASE_DIR / 'cfr/example_network_policy_5c6z10m.pth'
-MODEL_IN_SIZE = 1734
-MODEL_OUT_SIZE = 252
-NUM_TIME_STEPS = 144
-NUM_SIM_STEPS = 2880
+NUM_TIME_STEPS = (24 * 60 * 60) / (10 * 60) # 10 mins
+NUM_SIM_STEPS = (24 * 60 * 60) / 30 # 30 seconds
+# Example network
+# MODEL_PATH = BASE_DIR / 'cfr/example_network_policy_5c6z10m.pth'
+# MODEL_IN_SIZE = 5 + (NUM_TIME_STEPS * 5 * 2) # 5 zones
+# MODEL_OUT_SIZE = max_actions(5, 6) # 5 cars
+# NYC network
+MODEL_PATH = BASE_DIR / 'cfr/manhattan_network_policy_5c8z10m.pth'
+MODEL_IN_SIZE = 8 + (NUM_TIME_STEPS * 8 * 2) # 8 zones
+MODEL_OUT_SIZE = max_actions(5, 8) # 5 cars
 
 class GameRepositioning(RepositioningBase):
     def __init__(self, fleetctrl, operator_attributes, dir_names):
@@ -178,12 +184,11 @@ class GameRepositioning(RepositioningBase):
             lock = self.lock_repo_assignments
 
         # Repositioning logic
-        # list_veh_with_changes = []
-        # if self.step % (NUM_SIM_STEPS // NUM_TIME_STEPS) == 0 and self.time_step_count < NUM_TIME_STEPS:
-        #     # Only repo for num time steps we trained on
-        #     list_veh_with_changes = self.time_step()
-        #     self.time_step_count += 1
-        # self.step += 1
+        list_veh_with_changes = []
+        if self.step % (NUM_SIM_STEPS // NUM_TIME_STEPS) == 0 and self.time_step_count < NUM_TIME_STEPS:
+            # Only repo for num time steps we trained on
+            list_veh_with_changes = self.time_step()
+            self.time_step_count += 1
+        self.step += 1
         
-        # return list_veh_with_changes
-        return []
+        return list_veh_with_changes

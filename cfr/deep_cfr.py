@@ -191,7 +191,7 @@ class DeepCFR:
                 
                 total_loss += loss.item()
 
-if __name__ == '__main__':
+def train_example_network():
     p1, p2 = (5, 6), (5, 6)
     t = 10 * 60 # 10 mins
     depth = (24 * 60 * 60) // t # 10 min steps -> 144 layers
@@ -205,8 +205,47 @@ if __name__ == '__main__':
     # Create game
     game = StochasticGame(p1, p2, depth, t, transition=transition)
     
+    # Train
     deepcfr = DeepCFR(game)
     time_func(deepcfr.train, {'iters': 5, 'traversals_per_iter': 100})
 
     # Save the policy
     save_policy(deepcfr.policy_net, './cfr/example_network_policy_5c6z10m.pth')
+
+def train_nyc_network():
+    p1, p2 = (5, 8), (5, 8)
+    t = 10 * 60 # 10 mins
+    depth = (24 * 60 * 60) // t # 10 min steps -> 144 layers
+
+    # Setup transition info
+    zones = load_zones('./data/zones/manhattan_zones/Manhattan_corrected_12min_max/Manhattan_2019_corrected/node_zone_info.csv')
+    demand_files = [
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-11.csv',
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-12.csv',
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-13.csv',
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-14.csv',
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-15.csv',
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-16.csv',
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-17.csv',
+        './data/demand/manhattan_demand/matched/Manhattan_2019_corrected/2018-11-18.csv'
+    ]
+    demands = [load_demand(demand_file) for demand_file in demand_files]
+    graph = load_graph('./data/networks/manhattan_network/base/nodes.csv', './data/networks/manhattan_network/base/edges.csv')
+    transition = Transition(p1, p2, graph, zones, demands)
+
+    # Create game
+    game = StochasticGame(p1, p2, depth, t, transition=transition)
+    
+    # Train
+    deepcfr = DeepCFR(game)
+    time_func(deepcfr.train, {'iters': 5, 'traversals_per_iter': 100})
+
+    # Save the policy
+    save_policy(deepcfr.policy_net, './cfr/manhattan_network_policy_5c8z10m.pth')
+
+if __name__ == '__main__':
+    # Example network
+    # train_example_network()
+
+    # NYC network
+    train_nyc_network()

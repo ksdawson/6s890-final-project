@@ -39,12 +39,12 @@ def load_graph(node_file, edge_file, directed=True):
 
 def load_zones(file_path):
     zones = {}
-    with open(file_path, 'r') as file:
-        content = file.read()
-        lines = content.splitlines()
-        for i in range(1, len(lines)):
-            line = lines[i].split(',')
-            node, zone, _ = int(line[0]), int(line[1]), line[2]
+    with open(file_path, newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Using headers: "node_index,zone_id,is_centroid,is_boarding_node"
+            node = int(row['node_index'])
+            zone = int(row['zone_id'])
             if zone not in zones:
                 zones[zone] = set()
             zones[zone].add(node)
@@ -52,12 +52,13 @@ def load_zones(file_path):
 
 def load_demand(file_path):
     demand = []
-    with open(file_path, 'r') as file:
-        content = file.read()
-        lines = content.splitlines()
-        for i in range(1, len(lines)):
-            line = lines[i].split(',')
-            t, src, dst, _ = int(line[0]), int(line[1]), int(line[2]), line[3]
+    with open(file_path, newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Using headers: "request_id,rq_time,start,end"
+            t = int(row['rq_time'])
+            src = int(row['start'])
+            dst = int(row['end'])   
             demand.append((t, src, dst))
     return demand
 
@@ -234,7 +235,7 @@ class Transition:
                 # First time step include everything from beginning to t
                 curr_demand.append(req)
             else:
-                if time_idx * (time_step-1) <= req_t and req_t <= time_idx * time_step:
+                if time_idx * (time_step-1) < req_t and req_t <= time_idx * time_step:
                     curr_demand.append(req)
         
         # Aggregate by zone
