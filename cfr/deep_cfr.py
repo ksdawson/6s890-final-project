@@ -141,14 +141,7 @@ class DeepCFR:
             )
 
             # Clear regret samples to prevent mixing old (bad) data with new data
-            self.mccfr.regret_buffer = []
-
-            # Optional: Clear policy samples if memory is an issue
-            MAX_POLICY_SAMPLES = 20000
-            if len(policy_data) > MAX_POLICY_SAMPLES:
-                # Randomly sample to keep size manageable
-                indices = np.random.choice(len(policy_data), MAX_POLICY_SAMPLES, replace=False)
-                self.mccfr.policy_buffer = [policy_data[i] for i in indices]
+            self.mccfr.regret_buffer.reset()
 
             print(f'Progress: {round((i+1)/iters * 100, 2)}% done')
 

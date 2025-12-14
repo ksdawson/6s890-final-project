@@ -24,6 +24,10 @@ class ReservoirBuffer:
                 self.data[j] = item
         
         self.total_seen += 1
+    
+    def reset(self):
+        self.data = []
+        self.total_seen = 0
 
     def sample(self, batch_size):
         """Return a random batch from the buffer."""
@@ -37,7 +41,7 @@ class ReservoirBuffer:
             yield infoset, target_vec
 
 class MonteCarloCFR:
-    def __init__(self, game, deep_cfr=False, model=None, buffer_size=10000):
+    def __init__(self, game, deep_cfr=False, model=None, buffer_size=20000):
         self.game = game
         self.regret_sum = {} # R[I][a]
         self.strategy_sum = {} # s[I][a]
