@@ -101,10 +101,10 @@ class MonteCarloCFR:
     def sample_action(self, actions, sigma):
         return random.choices(actions, weights=[sigma[a] for a in actions], k=1)[0]
     
-    def get_regrets(self, s, p, infoset):
+    def get_regrets(self, infoset, actions):
         if self.deep_cfr:
             regret_vector = self.model(infoset)
-            regrets = {a: r for a, r in zip(self.game.actions(s)[p-1], regret_vector)}
+            regrets = {a: r for a, r in zip(actions, regret_vector)}
             return regrets
         else:
             return self.regret_sum[infoset]
@@ -121,8 +121,8 @@ class MonteCarloCFR:
         infoset_2, actions_2 = self.update_infosets(s, 2)
 
         # Get strategies for both players
-        sigma_1 = self.regret_matching(self.get_regrets(s, 1, infoset_1))
-        sigma_2 = self.regret_matching(self.get_regrets(s, 2, infoset_2))
+        sigma_1 = self.regret_matching(self.get_regrets(infoset_1, actions_1))
+        sigma_2 = self.regret_matching(self.get_regrets(infoset_2, actions_2))
 
         # Sample actions from strategies
         a1_sampled = self.sample_action(actions_1, sigma_1)

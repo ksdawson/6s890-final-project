@@ -11,6 +11,9 @@ def time_func(func, args):
 def state_space_size(p, q):
     # Number of ways to assign 0 ... p items to q buckets
     return math.comb(p + q, q)
+
+def max_actions(p, q):
+    return math.comb(p + q - 1, q - 1)
     
 def get_infoset_count(p, q, depth):
     # Calculate State Space K

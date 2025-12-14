@@ -32,9 +32,9 @@ class StochasticGame:
     @classmethod
     def get_actions_for(cls, s):
         p, q = sum(s), len(s)
-        new_states = StochasticGame.generate_states(p, q)
+        new_states = get_combos(p, q)
         actions = {tuple(new_s[i] - s[i] for i in range(q)) for new_s in new_states}
-        return tuple(action for action in actions if sum(action) == 0)
+        return tuple(sorted(actions)) # deterministic
     
     def __init__(self, p1, p2, depth, t, transition, gamma=1.0):
         # Game params
