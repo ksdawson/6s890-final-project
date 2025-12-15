@@ -50,8 +50,6 @@ class GameEval:
         return {a: uniform_prob for a in actions}
 
     def play_game(self, game, num_hands, model, model_in_size, device):
-        model.eval() # switch to eval for inference
-
         r1s, r2s = [], []
         for hand in range(num_hands):
             # Get root of game tree
@@ -88,8 +86,6 @@ class GameEval:
             
             r1s.append(total_r1)
             r2s.append(total_r2)
-
-        model.train() # switch back to train
 
         # Avg rewards
         avg_r1, avg_r2 = sum(r1s)/len(r1s), sum(r2s)/len(r2s)
