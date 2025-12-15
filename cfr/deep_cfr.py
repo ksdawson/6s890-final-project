@@ -203,7 +203,7 @@ class DeepCFR:
             print(f'Starting train run {i}...')
 
             # Collect data
-            self.mccfr.train(traversals_per_iter)
+            self.mccfr.train(traversals_per_iter, traversals_per_iter*i)
             regret_data = self.mccfr.regret_buffer
             policy_data = self.mccfr.policy_buffer
 

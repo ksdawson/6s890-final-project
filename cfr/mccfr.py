@@ -63,10 +63,10 @@ class MonteCarloCFR:
             else:
                 self.strategy[i] = {a: 1/len(strategy) for a, s in strategy.items()}
 
-    def train(self, iters):
+    def train(self, iters, start_t=0):
         # Run a traversal for each player for each iteration
         for i in range(iters):
-            t = i + 1 # used for linear weighting like linear CFR
+            t = start_t + i + 1 # used for linear weighting like linear CFR
             self.traverse(self.game.initial_state(), p=1, t=t, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
             self.traverse(self.game.initial_state(), p=2, t=t, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
         # Compute the average strategy for each info set
