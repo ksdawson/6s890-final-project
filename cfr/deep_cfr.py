@@ -1,3 +1,4 @@
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +10,91 @@ import numpy as np
 from cfr.utils import time_func, max_actions
 from cfr.game import StochasticGame
 from cfr.transition import load_demand, load_graph, load_zones, Transition
+
+def predict(infoset, model, max_in_size, device):
+    # Switch to evaluation mode
+    model.eval()
+
+    # Disable gradient calculation
+    with torch.no_grad():
+        # Prepare input: Move to device and add batch dimension (1, N)
+        tensor_in = infoset_to_tensor(infoset, max_in_size, device=device)
+        
+        # Forward pass
+        output_tensor = model(tensor_in)
+        
+        # Post-process: Detach from graph -> Move to CPU -> Convert to Numpy
+        # [0] is used to unwrap the batch dimension
+        result = output_tensor.detach().cpu().numpy()[0]
+
+    # (Optional) Switch back to train mode if we're inside a training loop
+    model.train()
+
+    return result
+
+class GameEval:
+    def __init__(self):
+        pass
+
+    def sample_action(self, actions, sigma):
+        return random.choices(actions, weights=[sigma[a] for a in actions], k=1)[0]
+
+    def get_model_strategy(self, infoset, actions, model, model_in_size, device):
+        strategy = predict(infoset, model, model_in_size, device)
+        sigma = {a: strategy[i] for i, a in enumerate(actions)}
+        return sigma
+
+    def get_random_strategy(self, infoset, actions):
+        num_actions = len(actions)
+        uniform_prob = 1/num_actions
+        return {a: uniform_prob for a in actions}
+
+    def play_game(self, game, num_hands, model, model_in_size, device):
+        model.eval() # switch to eval for inference
+
+        r1s, r2s = [], []
+        for hand in range(num_hands):
+            # Get root of game tree
+            s = game.initial_state()
+
+            # Keep track of player rewards
+            total_r1, total_r2 = 0.0, 0.0
+
+            # Play until we reach a leaf node
+            k = 0
+            while not game.is_terminal(s):
+                # Get player info
+                infoset_1, actions_1 = s.infoset_key(1), game.actions(s)[0]
+                infoset_2, actions_2 = s.infoset_key(2), game.actions(s)[1]
+
+                # Get player strategies
+                sigma_1 = self.get_model_strategy(infoset_1, actions_1, model, model_in_size, device)
+                sigma_2 = self.get_random_strategy(infoset_2, actions_2)
+
+                # Sample player actions
+                a1_sampled = self.sample_action(actions_1, sigma_1)
+                a2_sampled = self.sample_action(actions_2, sigma_2)
+
+                # Sample from chance node to transition to next layer
+                next_s, (r1, r2), chance_prob = game.step(s, a1_sampled, a2_sampled)
+
+                # Update total reward with discounted reward
+                total_r1 += game.gamma**k * r1
+                total_r2 += game.gamma**k * r2
+
+                # Proceed to next state
+                s = next_s
+                k += 1
+            
+            r1s.append(total_r1)
+            r2s.append(total_r2)
+
+        model.train() # switch back to train
+
+        # Avg rewards
+        avg_r1, avg_r2 = sum(r1s)/len(r1s), sum(r2s)/len(r2s)
+
+        return avg_r1, avg_r2
 
 class RegretNetwork(nn.Module):
     def __init__(self, in_size, out_size, hidden_size=256):
@@ -86,6 +172,10 @@ class DeepCFR:
         self.num_actions = max(max_actions(*self.game.p1), max_actions(*self.game.p1))
         self.state_len = max(self.game.p1[1], self.game.p2[1])
 
+        # Game eval framework
+        self.game_eval = GameEval()
+        self.num_hands = 100
+
         # Initialize the solver
         self.mccfr = MonteCarloCFR(game, deep_cfr=True, model=self.model)
 
@@ -109,12 +199,10 @@ class DeepCFR:
         self.policy_net.to(self.device)
 
     def model(self, infoset, model_type):
-        infoset_tensor = infoset_to_tensor(infoset, self.max_in_size, device=self.device)
         if model_type == 'regret':
-            output = self.value_net(infoset_tensor)
+            return predict(infoset, self.value_net, self.max_in_size, self.device)
         else:
-            output = self.policy_net(infoset_tensor)
-        return output.detach().cpu().numpy()[0]
+            return predict(infoset, self.policy_net, self.max_in_size, self.device)
 
     def train(self, iters, traversals_per_iter=1000, batch_size=1024):
         print(f'Starting deep CFR training with {iters} train runs of {traversals_per_iter} hands...')
@@ -144,6 +232,10 @@ class DeepCFR:
                 batch_size,
                 is_policy=True
             )
+
+            # Evaluate the learned strategy
+            avg_r1, avg_r2 = self.game_eval.play_game(self.game, self.num_hands, self.policy_net, self.max_in_size, self.device)
+            print(f'Learned strategy vs random strategy got average rewards of {avg_r1}, {avg_r2} over {self.num_hands} on train run {i}')
 
             # Clear regret samples to prevent mixing old (bad) data with new data
             self.mccfr.regret_buffer.reset()

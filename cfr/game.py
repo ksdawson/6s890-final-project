@@ -72,9 +72,6 @@ class StochasticGame:
 
         return next_s, (r1, r2), prob
 
-def play_game(game):
-    pass
-
 if __name__ == '__main__':
     p1, p2 = (1, 2), (1, 2) 
     # One day represents one "hand"

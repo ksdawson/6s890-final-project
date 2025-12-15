@@ -185,7 +185,7 @@ class MonteCarloCFR:
         # Sample from chance for next state
         next_s, (r1, r2), chance_prob = self.game.step(s, a1_sampled, a2_sampled)
 
-        # Calculate discounted reward for this node
+        # Get reward for this node
         curr_u = r1 if p == 1 else r2
 
         # Recurse to get the future trajectory payoff and prob's
@@ -203,7 +203,7 @@ class MonteCarloCFR:
         if pi_total <= 1e-12:
             pi_total = 1e-12
 
-        # Get total utility
+        # Get total utility w/ discount for future payoffs
         total_u = past_u + curr_u + self.game.gamma * fut_u
 
         # Update regret for each action in infoset and strategy for infoset
