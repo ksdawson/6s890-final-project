@@ -9,52 +9,22 @@ from cfr.game import GameState, StochasticGame
 from cfr.deep_cfr import PolicyNetwork, load_policy, infoset_to_tensor
 from cfr.utils import max_actions
 
-# Competitor models
-from src.fleetctrl.repositioning.AlonsoMoraRepositioning import AlonsoMoraRepositioning
-from src.fleetctrl.repositioning.FrontiersDensityBasedRepositioning import DensityRepositioning
-from src.fleetctrl.repositioning.FullSamplingRidePoolingRebalancingMultiStage import FullSamplingRidePoolingRebalancingMultiStage
-from src.fleetctrl.repositioning.FullSamplingRidePoolingRebalancingMultiStageReservation import FullSamplingRidePoolingRebalancingMultiStageReservation
-from src.fleetctrl.repositioning.LinearHailingRebalancing import LinearHailingRebalancing
-from src.fleetctrl.repositioning.PavoneContinuous import PavoneContinuous
-from src.fleetctrl.repositioning.PavoneHailingFC import PavoneHailingRepositioningFC
-
 # Model info
 BASE_DIR = Path(__file__).resolve().parents[3]
-NUM_TIME_STEPS = (24 * 60 * 60) // (10 * 60) # 10 mins
-NUM_SIM_STEPS = (24 * 60 * 60) // 30 # 30 seconds
+MAX_DEPTH = (24 * 60 * 60) // (10 * 60) # we trained on 10 min timesteps
 # Example network
 MODEL_PATH = BASE_DIR / 'cfr/example_network_policy_5c6z10m.pth'
-MODEL_IN_SIZE = 6 + (NUM_TIME_STEPS * 6 * 2) # 6 zones
+MODEL_IN_SIZE = 6 + (MAX_DEPTH * 6 * 2) # 6 zones
 MODEL_OUT_SIZE = max_actions(5, 6) # 5 cars
 # NYC network
 # MODEL_PATH = BASE_DIR / 'cfr/manhattan_network_policy_5c8z10m.pth'
-# MODEL_IN_SIZE = 8 + (NUM_TIME_STEPS * 8 * 2) # 8 zones
+# MODEL_IN_SIZE = 8 + (MAX_DEPTH * 8 * 2) # 8 zones
 # MODEL_OUT_SIZE = max_actions(5, 8) # 5 cars
-
-# Competitor model
-COMPETITOR_OPTIONS = [
-    ('AlonsoMoraRepositioning', AlonsoMoraRepositioning),
-    ('FrontiersDensityBasedRepositioning', DensityRepositioning),
-    ('FullSamplingRidePoolingRebalancingMultiStage', FullSamplingRidePoolingRebalancingMultiStage),
-    ('FullSamplingRidePoolingRebalancingMultiStageReservation', FullSamplingRidePoolingRebalancingMultiStageReservation),
-    ('LinearHailingRebalancing', LinearHailingRebalancing),
-    ('PavoneContinuous', PavoneContinuous),
-    ('PavoneHailingFC', PavoneHailingRepositioningFC),
-    ('GameRepositioning', None)
-]
-COMPETITOR = COMPETITOR_OPTIONS[0]
 
 class GameRepositioning(RepositioningBase):
     def __init__(self, fleetctrl, operator_attributes, dir_names):
         # Setup base class
         super().__init__(fleetctrl, operator_attributes, dir_names)
-        
-        # Choose competitor model
-        if fleetctrl.op_id == 1 and COMPETITOR[0] != 'GameRepositioning':
-            # Second player uses a non-game model
-            self.player = fleetctrl.op_id
-            self.competitor = COMPETITOR[1](fleetctrl, operator_attributes, dir_names)
-            return
         
         # Get sim info
         self.player = self.fleetctrl.op_id
@@ -183,8 +153,12 @@ class GameRepositioning(RepositioningBase):
         self.update_state()
         actions = StochasticGame.get_actions_for(self.game_state.s1)
 
-        # Run model to get strategy
+        # Clip history as NN has a max input size
         infoset = self.game_state.infoset_key(1)
+        clip_size = max(len(infoset[2]) - MAX_DEPTH, 0)
+        infoset = (infoset[0], infoset[1], infoset[2][clip_size:])
+
+        # Run model to get strategy
         infoset_tensor = infoset_to_tensor(infoset, MODEL_IN_SIZE, device=self.device)
         with torch.no_grad():
             output = self.policy_net(infoset_tensor) # 1xN tensor
@@ -206,10 +180,6 @@ class GameRepositioning(RepositioningBase):
         return list_veh_with_changes
 
     def determine_and_create_repositioning_plans(self, sim_time, lock=None):
-        # Pass off to competitor
-        if self.player == 1 and COMPETITOR[0] != 'GameRepositioning':
-            return self.competitor.determine_and_create_repositioning_plans(sim_time, lock)
-
         # Setup
         self.zone_system.time_trigger(sim_time)
         self.sim_time = sim_time
@@ -217,11 +187,6 @@ class GameRepositioning(RepositioningBase):
             lock = self.lock_repo_assignments
 
         # Repositioning logic
-        list_veh_with_changes = []
-        if self.step % (NUM_SIM_STEPS // NUM_TIME_STEPS) == 0 and self.time_step_count < NUM_TIME_STEPS:
-            # Only repo for num time steps we trained on
-            list_veh_with_changes = self.time_step()
-            self.time_step_count += 1
-        self.step += 1
+        list_veh_with_changes = self.time_step()
         
         return list_veh_with_changes
