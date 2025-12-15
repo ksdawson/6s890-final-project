@@ -11,7 +11,7 @@ from cfr.utils import time_func, max_actions
 from cfr.game import StochasticGame
 from cfr.transition import load_demand, load_graph, load_zones, Transition
 
-def predict(infoset, model, max_in_size, device):
+def predict(infoset, model, max_in_size, device, is_policy=False, actions=None):
     # Switch to evaluation mode
     model.eval()
 
@@ -23,9 +23,15 @@ def predict(infoset, model, max_in_size, device):
         # Forward pass
         output_tensor = model(tensor_in)
         
-        # Post-process: Detach from graph -> Move to CPU -> Convert to Numpy
-        # [0] is used to unwrap the batch dimension
-        result = output_tensor.detach().cpu().numpy()[0]
+        if is_policy:
+            logits = output_tensor[0] # 1D tensor of size N
+            logits = logits[:len(actions)] # mask illegal actions
+            strategy = torch.softmax(logits, dim=0) # softmax over 1D vector
+            result = strategy.cpu().numpy()
+        else:
+            # Post-process: Detach from graph -> Move to CPU -> Convert to Numpy
+            # [0] is used to unwrap the batch dimension
+            result = output_tensor.detach().cpu().numpy()[0]
 
     # (Optional) Switch back to train mode if we're inside a training loop
     model.train()
@@ -40,7 +46,7 @@ class GameEval:
         return random.choices(actions, weights=[sigma[a] for a in actions], k=1)[0]
 
     def get_model_strategy(self, infoset, actions, model, model_in_size, device):
-        strategy = predict(infoset, model, model_in_size, device)
+        strategy = predict(infoset, model, model_in_size, device, is_policy=True, actions=actions)
         sigma = {a: strategy[i] for i, a in enumerate(actions)}
         return sigma
 
@@ -191,11 +197,11 @@ class DeepCFR:
         self.value_net.to(self.device)
         self.policy_net.to(self.device)
 
-    def model(self, infoset, model_type):
+    def model(self, infoset, model_type, actions=None):
         if model_type == 'regret':
             return predict(infoset, self.value_net, self.max_in_size, self.device)
         else:
-            return predict(infoset, self.policy_net, self.max_in_size, self.device)
+            return predict(infoset, self.policy_net, self.max_in_size, self.device, is_policy=True, actions=actions)
 
     def train(self, iters, traversals_per_iter=1000, batch_size=1024):
         print(f'Starting deep CFR training with {iters} train runs of {traversals_per_iter} hands...')
