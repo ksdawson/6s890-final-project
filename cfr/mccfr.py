@@ -66,8 +66,9 @@ class MonteCarloCFR:
     def train(self, iters):
         # Run a traversal for each player for each iteration
         for i in range(iters):
-            self.traverse(self.game.initial_state(), p=1, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
-            self.traverse(self.game.initial_state(), p=2, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
+            t = i + 1 # used for linear weighting like linear CFR
+            self.traverse(self.game.initial_state(), p=1, t=t, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
+            self.traverse(self.game.initial_state(), p=2, t=t, past_u=0.0, past_pi_p1=1.0, past_pi_p2=1.0, past_pi_chance=1.0)
         # Compute the average strategy for each info set
         if not self.deep_cfr:
             self.average_strategy()
@@ -117,7 +118,7 @@ class MonteCarloCFR:
         return cf_regret
     
     def update_player(self, infoset, actions, a_sampled, sigma, u,
-        pi_total, pi_total_opp_chance, pi_future_player, pi_past_player
+        pi_total, pi_total_opp_chance, pi_future_player, pi_past_player, t
     ):
         if self.deep_cfr:
             # Add samples for training
@@ -138,7 +139,7 @@ class MonteCarloCFR:
                 self.strategy_sum[infoset][a] += cf_strat
         if self.deep_cfr:
             self.regret_buffer.add((infoset, regret_vec))
-            self.policy_buffer.add((infoset, strategy_vec))
+            self.policy_buffer.add((infoset, strategy_vec, t))
 
     def sample_action(self, actions, sigma):
         return random.choices(actions, weights=[sigma[a] for a in actions], k=1)[0]
@@ -151,7 +152,7 @@ class MonteCarloCFR:
         else:
             return self.regret_sum[infoset]
 
-    def traverse(self, s, p,
+    def traverse(self, s, p, t,
         past_u, past_pi_p1, past_pi_p2, past_pi_chance
     ):
         # Base case
@@ -189,7 +190,7 @@ class MonteCarloCFR:
         curr_u = r1 if p == 1 else r2
 
         # Recurse to get the future trajectory payoff and prob's
-        fut_u, fut_pi_p1, fut_pi_p2, fut_pi_chance = self.traverse(next_s, p,
+        fut_u, fut_pi_p1, fut_pi_p2, fut_pi_chance = self.traverse(next_s, p, t,
             past_u + curr_u, past_pi_p1 * a1_sampled_prob, past_pi_p2 * a2_sampled_prob, past_pi_chance * chance_prob
         )
 
@@ -208,9 +209,9 @@ class MonteCarloCFR:
 
         # Update regret for each action in infoset and strategy for infoset
         if p == 1:
-            self.update_player(infoset_1, actions_1, a1_sampled, sigma_1, total_u, pi_total, pi_total_opp_chance, fut_pi_p1, past_pi_p1)
+            self.update_player(infoset_1, actions_1, a1_sampled, sigma_1, total_u, pi_total, pi_total_opp_chance, fut_pi_p1, past_pi_p1, t=t)
         else:
-            self.update_player(infoset_2, actions_2, a2_sampled, sigma_2, total_u, pi_total, pi_total_opp_chance, fut_pi_p2, past_pi_p2)
+            self.update_player(infoset_2, actions_2, a2_sampled, sigma_2, total_u, pi_total, pi_total_opp_chance, fut_pi_p2, past_pi_p2, t=t)
 
         # Return curr + future payoff and prob's
         return curr_u + fut_u, a1_sampled_prob * fut_pi_p1, a2_sampled_prob * fut_pi_p2, chance_prob * fut_pi_chance

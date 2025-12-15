@@ -165,7 +165,7 @@ class DeepCFR:
     def __init__(self, game):
         # Get game info
         self.game = game
-        self.num_actions = max(max_actions(*self.game.p1), max_actions(*self.game.p1))
+        self.num_actions = max(max_actions(*self.game.p1), max_actions(*self.game.p2))
         self.state_len = max(self.game.p1[1], self.game.p2[1])
 
         # Game eval framework
@@ -185,9 +185,6 @@ class DeepCFR:
         # Define Optimizers
         self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=0.001)
         self.policy_optimizer = optim.Adam(self.policy_net.parameters(), lr=0.001)
-        
-        # Define Loss Function (MSE is standard for Deep CFR)
-        self.loss_fn = nn.MSELoss()
         
         # Move to GPU if available
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -233,14 +230,18 @@ class DeepCFR:
             avg_r1, avg_r2 = self.game_eval.play_game(self.game, self.num_hands, self.policy_net, self.max_in_size, self.device)
             print(f'Learned strategy vs random strategy got average rewards of {avg_r1}, {avg_r2} over {self.num_hands} on train run {i}')
 
-            # Clear regret samples to prevent mixing old (bad) data with new data
-            self.mccfr.regret_buffer.reset()
-
             print(f'Progress: {round((i+1)/iters * 100, 2)}% done')
 
     def prepare_dataset(self, data):
+        # Extract data
+        if len(data[0]) == 3:
+            inputs, targets, weights = zip(*data)
+            weights = torch.tensor(weights, dtype=torch.float32, device=self.device)
+        else:
+            inputs, targets = zip(*data)
+            weights = torch.ones(len(targets), dtype=torch.float32, device=self.device)
+
         # Convert infosets to feature tensors
-        inputs, targets = zip(*data)
         input_tensors = tuple(infoset_to_tensor(infoset, self.max_in_size, device=self.device) for infoset in inputs)
         inputs = torch.cat(input_tensors)
 
@@ -255,7 +256,7 @@ class DeepCFR:
         ])
         targets = torch.tensor(targets, dtype=torch.float32, device=self.device)
 
-        return inputs, targets
+        return inputs, targets, weights
 
     def train_network(self, model, optimizer, train_data, val_data, batch_size, is_policy=False):
         if not train_data or not val_data:
@@ -264,14 +265,19 @@ class DeepCFR:
         print(f'Training {mode_name} network...')
         
         # Convert infosets to feature tensors
-        train_x, train_y = self.prepare_dataset(train_data)
+        train_x, train_y, train_w = self.prepare_dataset(train_data)
         if is_policy:
             # Normalize targets so they sum to 1 (like Softmax)
             # Add epsilon (1e-12) to prevent division by zero
             train_y = train_y / (train_y.sum(dim=1, keepdim=True) + 1e-12)
+            # Use KL Div Loss for Policy
+            loss_fn = nn.KLDivLoss(reduction='none')
+        else:
+            # Use MSE for Regret Net
+            loss_fn = nn.MSELoss(reduction='none')
         
         # Create dataLoader
-        dataset = TensorDataset(train_x, train_y)
+        dataset = TensorDataset(train_x, train_y, train_w)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
         # Train
@@ -279,23 +285,26 @@ class DeepCFR:
         epochs = 2 
         for epoch in range(epochs):
             total_loss = 0
-            for batch_x, batch_y in dataloader:
+            for batch_x, batch_y, batch_w in dataloader:
                 optimizer.zero_grad()
                 
                 # Forward pass
                 outputs = model(batch_x)
-                
+
                 if is_policy:
-                    outputs = F.softmax(outputs, dim=1)
-                
-                # Calculate Loss
-                loss = self.loss_fn(outputs, batch_y)
-                
-                # Backward pass
-                loss.backward()
+                    log_outputs = F.log_softmax(outputs, dim=1)
+                    loss_per_sample = loss_fn(log_outputs, batch_y).sum(dim=1)
+                else:
+                    loss_per_sample = loss_fn(outputs, batch_y).mean(dim=1)
+
+                # Apply Linear Weights (t)
+                # We normalize weights by the mean weight of the batch to keep gradient scale consistent
+                normalized_weights = batch_w / (batch_w.mean() + 1e-12)
+                weighted_loss = (loss_per_sample * normalized_weights).mean()
+
+                weighted_loss.backward()
                 optimizer.step()
-                
-                total_loss += loss.item()
+                total_loss += weighted_loss.item()
             
             print(f'Epoch {epoch} loss: {total_loss:.4f}')
 
@@ -303,7 +312,7 @@ class DeepCFR:
         model.eval() # Switch to evaluation mode (disables dropout/batchnorm updates)
         with torch.no_grad(): # Disable gradient calculation (saves memory)
             # Preprocess Validation Data
-            val_x, val_y = self.prepare_dataset(val_data)
+            val_x, val_y, val_w = self.prepare_dataset(val_data)
             
             # Forward pass on full validation set
             # (If val set is huge, wrap this in a DataLoader loop too)
@@ -311,9 +320,13 @@ class DeepCFR:
             
             if is_policy:
                 val_y = val_y / (val_y.sum(dim=1, keepdim=True) + 1e-12)
-                val_outputs = F.softmax(val_outputs, dim=1)
-            
-            val_loss = self.loss_fn(val_outputs, val_y).item()
+                val_outputs = F.log_softmax(val_outputs, dim=1)
+                raw_loss = loss_fn(val_outputs, val_y)
+                val_loss = raw_loss.sum(dim=1).mean().item()
+            else:
+                raw_loss = loss_fn(val_outputs, val_y)
+                val_loss = raw_loss.mean().item()
+
             print(f'>> Validation Loss ({mode_name}): {val_loss:.4f}')
         
         model.train() # Switch back to train mode for safety
